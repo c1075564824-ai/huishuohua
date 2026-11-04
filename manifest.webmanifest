@@ -1,0 +1,19 @@
+{
+  "name": "会说话",
+  "short_name": "会说话",
+  "description": "每天 15～25 分钟，练习把话说清楚、说舒服。",
+  "lang": "zh-CN",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f1e8",
+  "theme_color": "#f4f1e8",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

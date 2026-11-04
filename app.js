@@ -1561,6 +1561,10 @@
         <div class="content-card flat">
           <div class="data-actions">
             <button class="secondary-button block" data-action="export-data" ${!sessions.length ? "disabled" : ""}>${icon("download")} 导出全部记录</button>
+            <label class="secondary-button block" style="cursor:pointer">
+              ${icon("history")} 导入旧练习记录
+              <input id="record-import-input" type="file" accept="application/json,.json" hidden>
+            </label>
             <button class="danger-button block" data-action="clear-data" ${!sessions.length ? "disabled" : ""}>${icon("trash")} 清空全部本机数据</button>
           </div>
           <p class="data-note">导出的 JSON 包含复盘信息和录音数据，文件可能较大。请自行妥善保管。</p>
@@ -1687,6 +1691,54 @@
     } catch (error) {
       console.error("Export failed", error);
       showToast("导出失败，请稍后重试");
+    }
+  }
+
+  function dataUrlToBlob(dataUrl) {
+    const [header, encoded] = String(dataUrl).split(",");
+    const mime = header.match(/data:([^;]+)/)?.[1] || "audio/mp4";
+    const binary = atob(encoded || "");
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new Blob([bytes], { type: mime });
+  }
+
+  async function importRecords(file) {
+    if (!file) return;
+    try {
+      const payload = JSON.parse(await file.text());
+      const incoming = Array.isArray(payload) ? payload : payload.sessions;
+      if (!Array.isArray(incoming)) throw new Error("Invalid record file");
+      let imported = 0;
+      let skipped = 0;
+      for (const rawSession of incoming) {
+        if (!rawSession?.id || state.sessions.some((item) => item.id === rawSession.id)) {
+          skipped += 1;
+          continue;
+        }
+        const attempts = [];
+        for (const rawAttempt of rawSession.attempts || []) {
+          const { audioDataUrl, ...attempt } = rawAttempt;
+          attempts.push({
+            ...attempt,
+            blob: audioDataUrl ? dataUrlToBlob(audioDataUrl) : null,
+          });
+        }
+        await putSession({ ...rawSession, attempts });
+        imported += 1;
+      }
+      await refreshSessions();
+      render();
+      showToast(
+        imported
+          ? `已导入 ${imported} 次练习${skipped ? `，跳过 ${skipped} 条重复记录` : ""}`
+          : "没有新的练习记录需要导入",
+      );
+    } catch (error) {
+      console.error("Import failed", error);
+      showToast("导入失败，请选择由“会说话”导出的 JSON 文件");
     }
   }
 
@@ -1904,6 +1956,11 @@
   app.addEventListener("change", (event) => {
     if (event.target.id === "audio-file-input") {
       loadUploadedAudio(event.target.files?.[0]);
+    }
+    if (event.target.id === "record-import-input") {
+      importRecords(event.target.files?.[0]).finally(() => {
+        event.target.value = "";
+      });
     }
   });
 

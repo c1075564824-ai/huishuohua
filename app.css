@@ -2109,6 +2109,345 @@ audio {
   }
 }
 
+/* V2.1 interface refinement */
+
+.bottom-nav {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.topbar-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.icon-button.compact {
+  width: 34px;
+  height: 34px;
+}
+
+.icon-button.compact svg {
+  width: 17px;
+  height: 17px;
+}
+
+.today-hero {
+  background: #173f33;
+  box-shadow: 0 12px 32px rgba(23, 63, 51, 0.14);
+}
+
+.today-hero::after {
+  display: none;
+}
+
+.today-hero h1 {
+  margin-top: 16px;
+}
+
+.today-hero blockquote {
+  border: 0;
+  padding: 4px 0 0;
+  color: #f3d49f;
+  background: transparent;
+  font-size: 18px;
+}
+
+.today-route {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 10px;
+}
+
+.today-route span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.today-route strong {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 15px;
+}
+
+.today-route i {
+  width: 12px;
+  height: 1px;
+  background: var(--line-strong);
+}
+
+.today-review-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 12px;
+  padding: 11px 2px;
+  color: #895a22;
+  background: transparent;
+  font-size: 10px;
+  text-align: left;
+}
+
+.today-review-line svg {
+  width: 15px;
+}
+
+.today-review-line svg:last-child {
+  margin-left: auto;
+}
+
+.home-meta-line {
+  display: flex;
+  justify-content: center;
+  gap: 15px;
+  margin-top: 17px;
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
+.home-meta-line span + span::before {
+  margin-right: 15px;
+  content: "·";
+}
+
+.training-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin: -4px 0 17px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 253, 247, 0.55);
+}
+
+.training-tabs button {
+  min-height: 38px;
+  border-radius: 999px;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.training-tabs button.active {
+  color: #fff;
+  background: var(--green);
+}
+
+.ability-path-list {
+  display: grid;
+  gap: 7px;
+}
+
+.ability-row {
+  display: grid;
+  grid-template-columns: 42px 1fr auto 15px;
+  gap: 11px;
+  align-items: center;
+  width: 100%;
+  padding: 14px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  background: rgba(255, 253, 247, 0.75);
+  text-align: left;
+}
+
+.ability-row-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  place-items: center;
+}
+
+.ability-row-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.ability-row-icon.green {
+  color: var(--green);
+  background: var(--green-light);
+}
+
+.ability-row-icon.amber {
+  color: #825624;
+  background: var(--amber-soft);
+}
+
+.ability-row-icon.rose {
+  color: #85484c;
+  background: var(--rose-soft);
+}
+
+.ability-row-icon.blue {
+  color: #3e6280;
+  background: var(--blue-soft);
+}
+
+.ability-row-copy {
+  min-width: 0;
+}
+
+.ability-row-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ability-row-title strong {
+  font-family: var(--font-display);
+  font-size: 18px;
+}
+
+.ability-row-title small {
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+.ability-row-desc {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ability-row .ability-progress {
+  height: 3px;
+  margin-top: 9px;
+  background: var(--paper-strong);
+}
+
+.ability-row .ability-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green-mid);
+}
+
+.ability-row-state {
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
+.ability-row > svg {
+  width: 14px;
+  color: var(--ink-faint);
+}
+
+.quiet-footnote {
+  margin: 18px 8px 0;
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.ability-detail-hero {
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+
+.ability-detail-hero .eyebrow {
+  color: var(--ink-faint);
+}
+
+.ability-detail-hero blockquote {
+  border-left: 2px solid var(--ability-color);
+  border-radius: 0;
+  background: transparent;
+}
+
+.content-card {
+  box-shadow: none;
+}
+
+.reading-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.practice-more {
+  width: 100%;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.practice-more summary {
+  padding: 11px 2px;
+  color: var(--ink-faint);
+  font-size: 10px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.practice-more[open] summary {
+  margin-bottom: 8px;
+}
+
+.practice-more .secondary-button,
+.practice-more .quiet-button {
+  margin-top: 7px;
+}
+
+.review-notes {
+  margin-top: 12px;
+}
+
+.completion-screen {
+  display: grid;
+  align-content: center;
+  min-height: calc(100vh - 150px);
+  text-align: center;
+}
+
+.completion-mark {
+  display: grid;
+  width: 68px;
+  height: 68px;
+  margin: 0 auto 18px;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--green);
+  place-items: center;
+}
+
+.completion-mark svg {
+  width: 30px;
+  height: 30px;
+}
+
+.completion-screen h1 {
+  margin-top: 8px;
+  font-family: var(--font-display);
+  font-size: 32px;
+}
+
+.completion-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 15px;
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

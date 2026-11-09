@@ -314,7 +314,10 @@
   function topbar() {
     return `<header class="topbar">
       <div class="brand"><span class="brand-mark">${icon("logo")}</span><span class="brand-name">会说话 <small class="version-tag">V2.1</small></span></div>
-      <div class="date-label">${formatDate(todayKey())}<br>每天练一点，现场稳一点</div>
+      <div class="topbar-tools">
+        <span class="date-label">${formatDate(todayKey())}</span>
+        <button class="icon-button ghost compact" data-action="open-library" aria-label="搜索素材">${icon("search")}</button>
+      </div>
     </header>`;
   }
 
@@ -329,8 +332,7 @@
   function bottomNav(active) {
     const items = [
       ["today", "home", "今日"],
-      ["abilities", "ability", "能力"],
-      ["library", "book", "素材"],
+      ["training", "book", "训练"],
       ["reviews", "history", "复习"],
     ];
     return `<nav class="bottom-nav">${items
@@ -344,6 +346,13 @@
 
   function abilityChip(ability) {
     return `<span class="ability-chip ${ability.color}">${icon(ability.icon)}${esc(ability.title)}</span>`;
+  }
+
+  function trainingTabs(active) {
+    return `<div class="training-tabs">
+      <button class="${active === "path" ? "active" : ""}" data-action="training-view" data-value="path">训练路径</button>
+      <button class="${active === "library" ? "active" : ""}" data-action="training-view" data-value="library">素材库</button>
+    </div>`;
   }
 
   function renderToday() {
@@ -363,7 +372,7 @@
     const due = getDueReviews();
     return `<div class="page">
       ${topbar()}
-      <section class="today-hero ${ability.color} fade-in">
+      <section class="today-hero fade-in">
         <div class="today-hero-top">
           ${abilityChip(ability)}
           <span class="today-time">${fullCompletedToday ? "今日完整练已完成" : shortCompletedToday ? "今日已短练" : "今日推荐"}</span>
@@ -386,36 +395,19 @@
         }
       </section>
 
-      <section class="section">
-        <div class="section-head"><div><h2>一条训练流程</h2><p>短练和完整练共用同一份素材；短练可随时继续到完整练。</p></div></div>
-        <div class="training-path">
-          <div><span>01</span><strong>跟</strong><small>听与跟读</small></div>
-          <div><span>02</span><strong>忆</strong><small>关键词复述</small></div>
-          <div><span>03</span><strong>用</strong><small>场景表达</small></div>
-          <div><span>04</span><strong>改</strong><small>回听重说</small></div>
-        </div>
-      </section>
+      <div class="today-route" aria-label="训练流程">
+        <span><strong>跟</strong>节奏</span><i></i><span><strong>忆</strong>重点</span><i></i><span><strong>用</strong>场景</span><i></i><span><strong>改</strong>一处</span>
+      </div>
 
-      ${due.length ? `<section class="section"><button class="review-reminder" data-action="navigate" data-route="reviews">
-        <span class="history-icon">${icon("refresh")}</span>
-        <span><strong>今天有 ${due.length} 个旧内容该复习</strong><small>每次只用 30～60 秒重新调取</small></span>
-        ${icon("chevron")}
-      </button></section>` : ""}
+      ${due.length ? `<button class="today-review-line" data-action="navigate" data-route="reviews">
+        ${icon("refresh")} 今天有 ${due.length} 个内容该复习 ${icon("chevron")}
+      </button>` : ""}
 
-      <section class="section">
-        <div class="two-stat-card">
-          <div><strong>${completedLessons()}</strong><span>/ 28 已掌握</span></div>
-          <div><strong>${weekPracticeDays()}</strong><span>本周练过几天</span></div>
-          <div><strong>${Object.keys(state.progress).filter((id) => getLessonProgress(id).completed).length ? getDueReviews().length : 0}</strong><span>待复习</span></div>
-        </div>
-      </section>
-
-      <section class="section">
-        <div class="insight-card">
-          <span class="mini-icon">${icon(ability.icon)}</span>
-          <div><h3>${esc(ability.title)}：${esc(ability.tagline)}</h3><p>${esc(ability.description)}</p></div>
-        </div>
-      </section>
+      <div class="home-meta-line">
+        <span>已训练 ${completedLessons()}/28</span>
+        <span>本周 ${weekPracticeDays()} 天</span>
+        <span>待复习 ${due.length}</span>
+      </div>
       ${progress.shortCount > 0 && !progress.completed ? `<p class="subtle-note">你已经短练过 ${progress.shortCount} 次。继续一次完整练，就会把这课标为已训练。</p>` : ""}
     </div>${bottomNav("today")}`;
   }
@@ -424,29 +416,30 @@
     return `<div class="page">
       ${topbar()}
       <header class="page-heading fade-in">
-        <div class="eyebrow">Four core abilities</div>
-        <h1>场景很多，<br>底层能力只有四种。</h1>
-        <p>每周只主攻一个能力，用不同场景反复练。当前完成 ${completedLessons()} / 28 个训练包。</p>
+        <div class="eyebrow">训练</div>
+        <h1>一次只练<br>一种能力。</h1>
+        <p>每周主攻一项，用不同场景反复调用。已训练 ${completedLessons()} / 28。</p>
       </header>
-      <div class="ability-list">
+      ${trainingTabs("path")}
+      <div class="ability-path-list">
         ${DATA.abilities
           .map((ability) => {
             const progress = abilityProgress(ability.id);
-            return `<button class="ability-card ${ability.color}" data-action="open-ability" data-id="${ability.id}">
-              <div class="ability-card-head">
-                <span class="group-icon">${icon(ability.icon)}</span>
-                <span class="ability-week">第 ${ability.week} 周</span>
-              </div>
-              <h2>${esc(ability.title)}</h2>
-              <p>${esc(ability.tagline)}</p>
-              <div class="ability-progress"><span><i style="width:${progress.percent}%"></i></span><small>${progress.complete} / ${progress.total}${progress.short ? ` · ${progress.short} 次短练` : ""}</small></div>
-              <div class="ability-card-rule">${esc(ability.rule)}</div>
+            return `<button class="ability-row" data-action="open-ability" data-id="${ability.id}">
+              <span class="ability-row-icon ${ability.color}">${icon(ability.icon)}</span>
+              <span class="ability-row-copy">
+                <span class="ability-row-title"><strong>${esc(ability.title)}</strong><small>第 ${ability.week} 周</small></span>
+                <span class="ability-row-desc">${esc(ability.tagline)}</span>
+                <span class="ability-progress"><i style="width:${progress.percent}%"></i></span>
+              </span>
+              <span class="ability-row-state">${progress.complete}/${progress.total}</span>
+              ${icon("chevron")}
             </button>`;
           })
           .join("")}
       </div>
-      <div class="notice neutral">${icon("shield")}<span>先学新内容，再通过第 1、3、7、14、30 天的间隔复习，把同一结构迁移到不同场景。</span></div>
-    </div>${bottomNav("abilities")}`;
+      <p class="quiet-footnote">不必赶进度。完成一次完整练，才算这一课真正练过。</p>
+    </div>${bottomNav("training")}`;
   }
 
   function renderAbilityDetail(ability) {
@@ -477,7 +470,7 @@
           .join("")}
       </div>
       <div class="notice neutral">${icon("refresh")}<span>已经完成的内容可以随时加练。重复不是倒退，换场景调用才是强化。</span></div>
-    </div>${bottomNav("abilities")}`;
+    </div>${bottomNav("training")}`;
   }
 
   function lessonStatusLabel(lesson) {
@@ -530,7 +523,7 @@
         </button>
         <button class="quiet-button block" style="margin-top:8px" data-action="start-mode" data-id="${lesson.id}" data-mode="short">先短练 · 约 3 分钟</button>
       </div>
-    </div>${bottomNav("library")}`;
+    </div>${bottomNav("training")}`;
   }
 
   function filteredLibrary() {
@@ -598,10 +591,11 @@
     return `<div class="page">
       ${topbar()}
       <header class="page-heading fade-in">
-        <div class="eyebrow">Material library</div>
-        <h1>先存好句子，<br>再练成自己的。</h1>
-        <p>${DATA.lessons.length} 个训练包与 ${totalPhrases} 条实用表达。搜索故事、金句、场景或用途。</p>
+        <div class="eyebrow">训练</div>
+        <h1>找一句话，<br>练成自己的。</h1>
+        <p>${DATA.lessons.length} 个训练包与 ${totalPhrases} 条实用表达。</p>
       </header>
+      ${trainingTabs("library")}
       <div class="library-search">${icon("search")}<input id="library-search" type="search" value="${esc(state.libraryQuery)}" placeholder="搜索：会议、夸奖、敬酒、故事……"></div>
       <div class="filter-chips" id="library-filters">
         ${[
@@ -615,7 +609,7 @@
           .join("")}
       </div>
       <div id="library-results" class="library-results">${libraryResultsMarkup()}</div>
-    </div>${bottomNav("library")}`;
+    </div>${bottomNav("training")}`;
   }
 
   function sessionTitle(session) {
@@ -637,8 +631,8 @@
     return `<div class="page">
       ${topbar()}
       <header class="page-heading fade-in">
-        <div class="eyebrow">Review & history</div>
-        <h1>复习，是把学过<br>变成会用。</h1>
+        <div class="eyebrow">复习</div>
+        <h1>把学过的，<br>重新想起来。</h1>
         <p>到期复习每次只花 30～60 秒。先回忆，再看答案，不重复整堂课。</p>
       </header>
       <section class="due-panel">
@@ -713,7 +707,7 @@
     const attempts = session.attempts || [];
     return `<div class="page">
       ${backbar("本次训练")}
-      <section class="record-hero ${lesson ? getAbility(lesson.ability).color : "green"}">
+      <section class="record-hero">
         <div class="eyebrow">${esc(session.abilityTitle || session.kind || "历史记录")} · ${shortDate(session.createdAt)}</div>
         <h1>${esc(sessionTitle(session))}</h1>
         <blockquote>${esc(session.goldLine || session.review?.headline || "把练习留在本机，把变化带到现场。")}</blockquote>
@@ -832,6 +826,7 @@
       attempts: [],
       startedAt: Date.now(),
       hintRevealed: false,
+      showBreathMarks: false,
       recording: false,
       saving: false,
       micError: "",
@@ -877,6 +872,11 @@
       navigate("today");
       return;
     }
+    if (practice.step === "complete") {
+      state.practice = null;
+      navigate("today");
+      return;
+    }
     if (practice.recording && !window.confirm("当前录音还没有结束，退出会丢弃这一段录音。确定退出吗？")) {
       return;
     }
@@ -893,7 +893,9 @@
     const ability = getAbility(lesson.ability);
     const stageOrder = ["follow", "recall", "apply", "review"];
     const active =
-      practice.step === "reviewQuick"
+      practice.step === "complete"
+        ? 3
+        : practice.step === "reviewQuick"
         ? 0
         : Math.max(0, stageOrder.indexOf(practice.step));
     return `<header class="backbar practice-header">
@@ -973,6 +975,9 @@
     const lesson = getLesson(practice.lessonId);
     const ability = getAbility(lesson.ability);
     const seconds = practice.mode === "short" ? 90 : 180;
+    const displayReading = practice.showBreathMarks
+      ? lesson.reading
+      : lesson.reading.replaceAll("//", " ").replace(/【[^】]+】/g, "");
     return `<div class="page page-practice">
       ${practiceHeader(lesson)}
       <main class="practice-shell">
@@ -983,8 +988,14 @@
             <p>${esc(ability.rule)}。可先听一遍系统示范，再跟读两遍；出现不适时停下来。</p>
           </div>
           <section class="reading-card">
-            <div class="reading-card-head"><span>${icon("volume")} 跟读材料</span><button class="text-button" data-action="speak-reading">听示范</button></div>
-            <div class="reading-text">${esc(lesson.reading)}</div>
+            <div class="reading-card-head">
+              <span>${icon("volume")} 跟读材料</span>
+              <span class="reading-actions">
+                <button class="text-button" data-action="speak-reading">听示范</button>
+                <button class="text-button" data-action="toggle-breath">${practice.showBreathMarks ? "隐藏气口" : "查看气口"}</button>
+              </span>
+            </div>
+            <div class="reading-text">${esc(displayReading)}</div>
             ${lesson.classicQuote ? `<p class="classic-quote">${esc(lesson.classicQuote)}</p>` : ""}
           </section>
           <section class="content-card flat">
@@ -1072,8 +1083,11 @@
                 </div>`
               : `<div class="record-area">
                   ${recordingSupported() ? `<button class="record-button" data-action="start-recording" aria-label="开始录音">${icon("mic")}</button><p class="record-help">点击录音，音频只留在这台设备</p>` : `<div class="notice">${icon("info")}<span>${window.isSecureContext ? "当前浏览器不支持录音。你仍可完成表达和无录音复盘。" : "当前不是 HTTPS，麦克风可能不可用。"}</span></div>`}
-                  <label class="secondary-button block" style="cursor:pointer">${icon("volume")} 导入手机已有录音<input id="audio-file-input" type="file" accept="audio/*" hidden></label>
-                  <button class="quiet-button block" data-action="skip-recording">不录音，直接进入复盘</button>
+                  <details class="practice-more">
+                    <summary>更多方式</summary>
+                    <label class="secondary-button block" style="cursor:pointer">${icon("volume")} 导入手机已有录音<input id="audio-file-input" type="file" accept="audio/*" hidden></label>
+                    <button class="quiet-button block" data-action="skip-recording">不录音，直接进入复盘</button>
+                  </details>
                 </div>`
           }
           <div class="notice neutral">${icon("shield")}<span>发声不舒服时停止练习。这里只训练表达与舒适度，不判断发声位置，也不做嗓音诊断。</span></div>
@@ -1122,10 +1136,10 @@
               <h3>这次的状态</h3>
               ${practiceStatusForm(practice)}
             </section>
-            <section class="content-card">
-              <h3>只留一句提醒</h3>
+            <details class="practice-more review-notes">
+              <summary>添加一句提醒（可选）</summary>
               <textarea class="notes-input" id="training-notes" maxlength="180" placeholder="例如：结论后停顿；把第二项待办说清楚；第一句慢一点。">${esc(practice.notes)}</textarea>
-            </section>
+            </details>
             ${
               practice.mode === "full" && practice.attempts.length === 1 && practice.attempts[0].blob
                 ? `<button class="secondary-button block" type="button" data-action="retry-apply">${icon("refresh")} 按这个提醒再说一遍</button>`
@@ -1133,6 +1147,39 @@
             }
             <div class="bottom-cta"><button class="primary-button block" type="submit">保存这次训练 ${icon("check")}</button></div>
           </form>
+        </section>
+      </main>
+    </div>`;
+  }
+
+  function renderPracticeComplete() {
+    const practice = state.practice;
+    const lesson = getLesson(practice.lessonId);
+    const progress = practice.savedProgress || getLessonProgress(lesson.id);
+    const canContinue = practice.mode === "short" && !progress.completed;
+    return `<div class="page page-practice">
+      ${practiceHeader(lesson)}
+      <main class="practice-shell">
+        <section class="practice-center fade-in completion-screen">
+          <span class="completion-mark">${icon("check")}</span>
+          <div class="eyebrow">${practice.isReview ? "复习完成" : practice.mode === "short" ? "今日短练完成" : "今日完整练完成"}</div>
+          <h1>${practice.isReview ? "记忆又稳了一点。" : "今天练到这里。"}</h1>
+          <blockquote class="gold-quote small">${esc(lesson.goldLine)}</blockquote>
+          <div class="completion-meta">
+            <span>状态：${esc(practice.status)}</span>
+            <span>${progress.nextReview ? `下次复习：${formatDate(progress.nextReview)}` : "短练已记录"}</span>
+          </div>
+          <div class="bottom-cta">
+            ${
+              canContinue
+                ? `<button class="primary-button block" data-action="continue-after-short" data-id="${lesson.id}">继续完整练 ${icon("chevron")}</button>`
+                : `<button class="primary-button block" data-action="finish-practice">完成 ${icon("check")}</button>`
+            }
+          </div>
+          <div class="button-row" style="margin-top:10px">
+            <button class="secondary-button" data-action="open-record" data-id="${practice.savedSessionId}">查看记录</button>
+            ${canContinue ? `<button class="quiet-button" data-action="finish-practice">今天到这里</button>` : `<button class="quiet-button" data-action="open-lesson" data-id="${lesson.id}">回到这一课</button>`}
+          </div>
         </section>
       </main>
     </div>`;
@@ -1154,6 +1201,8 @@
         return renderPracticeApply();
       case "review":
         return renderPracticeReview();
+      case "complete":
+        return renderPracticeComplete();
       default:
         return renderPracticeFollow();
     }
@@ -1486,8 +1535,14 @@
       await refreshData();
       clearPracticeDraft();
       cleanupPracticeMedia();
-      state.practice = null;
-      navigate(`record/${session.id}`);
+      state.practice = {
+        ...practice,
+        step: "complete",
+        savedSessionId: session.id,
+        savedProgress: progress,
+        saving: false,
+      };
+      render();
       showToast(practice.isReview ? "复习已完成" : "训练已保存在本机");
     } catch (error) {
       console.error("Save failed", error);
@@ -1688,6 +1743,9 @@
       case "today":
         html = renderToday();
         break;
+      case "training":
+        html = state.routeId === "library" ? renderLibrary() : renderAbilities();
+        break;
       case "abilities":
         html = renderAbilities();
         break;
@@ -1728,6 +1786,12 @@
       case "back":
         goBack();
         break;
+      case "open-library":
+        navigate("training/library");
+        break;
+      case "training-view":
+        navigate(`training/${trigger.dataset.value}`);
+        break;
       case "open-ability":
         navigate(`ability/${id}`);
         break;
@@ -1742,6 +1806,10 @@
         break;
       case "continue-after-short":
         continueAfterShort(id);
+        break;
+      case "finish-practice":
+        state.practice = null;
+        navigate("today");
         break;
       case "start-review":
         startMode(id, "review", true);
@@ -1771,6 +1839,10 @@
         break;
       case "reveal-hint":
         state.practice.hintRevealed = true;
+        render();
+        break;
+      case "toggle-breath":
+        state.practice.showBreathMarks = !state.practice.showBreathMarks;
         render();
         break;
       case "start-recording":

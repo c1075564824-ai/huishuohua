@@ -1,7 +1,7 @@
 {
   "name": "会说话",
   "short_name": "会说话",
-  "description": "每天 15～25 分钟，练习把话说清楚、说舒服。",
+  "description": "四周期表达训练：说得清、说得实、说得当、说得稳。最低 60 秒，每天练一点。",
   "lang": "zh-CN",
   "start_url": "./index.html",
   "scope": "./",

@@ -7,6 +7,7 @@
   const lessonsById = new Map(DATA.lessons.map((lesson) => [lesson.id, lesson]));
   const abilitiesById = new Map(DATA.abilities.map((ability) => [ability.id, ability]));
   const REVIEW_GAPS = [1, 3, 7, 14, 30];
+  const DRAFT_KEY = "hsh-v2-practice-draft";
   const ICONS = {
     logo: '<path d="M7 9.5a5 5 0 0 1 10 0v3a3 3 0 0 1-3 3h-1v-2h1a1 1 0 0 0 1-1v-3a3 3 0 0 0-6 0v3a1 1 0 0 0 1 1h1v2H9a3 3 0 0 1-3-3v-3Z"/><path d="M10 8.5h4v5h-4z"/>',
     home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1V10Z"/>',
@@ -210,6 +211,7 @@
         lessonId: id,
         completed: false,
         quickCount: 0,
+        shortCount: 0,
         followCount: 0,
         reviewStep: 0,
         mastery: "new",
@@ -217,6 +219,39 @@
         lastPracticeDate: null,
       }
     );
+  }
+
+  function getPracticeDraft() {
+    try {
+      const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
+      if (!draft?.lessonId || !getLesson(draft.lessonId)) return null;
+      return draft;
+    } catch {
+      return null;
+    }
+  }
+
+  function savePracticeDraft(practice, step = practice.step) {
+    if (!practice || practice.isReview || practice.saving) return;
+    const completed = new Set(practice.completedSteps || []);
+    const order = ["follow", "recall", "apply", "review"];
+    const currentIndex = order.indexOf(step);
+    order.slice(0, Math.max(0, currentIndex)).forEach((item) => completed.add(item));
+    localStorage.setItem(
+      DRAFT_KEY,
+      JSON.stringify({
+        lessonId: practice.lessonId,
+        mode: practice.mode,
+        step,
+        completedSteps: [...completed],
+        status: practice.status,
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function clearPracticeDraft() {
+    localStorage.removeItem(DRAFT_KEY);
   }
 
   function getDueReviews() {
@@ -247,7 +282,16 @@
   function abilityProgress(abilityId) {
     const abilityLessons = DATA.lessons.filter((lesson) => lesson.ability === abilityId);
     const complete = abilityLessons.filter((lesson) => getLessonProgress(lesson.id).completed).length;
-    return { complete, total: abilityLessons.length, percent: Math.round((complete / abilityLessons.length) * 100) };
+    const short = abilityLessons.reduce(
+      (sum, lesson) => sum + Number(getLessonProgress(lesson.id).shortCount || 0),
+      0,
+    );
+    return {
+      complete,
+      total: abilityLessons.length,
+      short,
+      percent: Math.round((complete / abilityLessons.length) * 100),
+    };
   }
 
   function completedLessons() {
@@ -269,7 +313,7 @@
 
   function topbar() {
     return `<header class="topbar">
-      <div class="brand"><span class="brand-mark">${icon("logo")}</span><span class="brand-name">会说话 <small class="version-tag">V2</small></span></div>
+      <div class="brand"><span class="brand-mark">${icon("logo")}</span><span class="brand-name">会说话 <small class="version-tag">V2.1</small></span></div>
       <div class="date-label">${formatDate(todayKey())}<br>每天练一点，现场稳一点</div>
     </header>`;
   }
@@ -302,59 +346,53 @@
     return `<span class="ability-chip ${ability.color}">${icon(ability.icon)}${esc(ability.title)}</span>`;
   }
 
-  function modeButtons(lesson, compact = false) {
-    return `<div class="mode-buttons ${compact ? "compact" : ""}">
-      <button class="mode-button" data-action="start-mode" data-id="${lesson.id}" data-mode="quick">
-        <span class="mode-time">60 秒</span><strong>门槛版</strong><small>读一句，说一句</small>
-      </button>
-      <button class="mode-button" data-action="start-mode" data-id="${lesson.id}" data-mode="standard">
-        <span class="mode-time">5 分钟</span><strong>标准版</strong><small>跟读与复述</small>
-      </button>
-      <button class="mode-button featured" data-action="start-mode" data-id="${lesson.id}" data-mode="full">
-        <span class="mode-time">15 分钟</span><strong>完整版</strong><small>跟·忆·用·改</small>
-      </button>
-    </div>`;
-  }
-
   function renderToday() {
     const lesson = getDailyLesson();
     const ability = getAbility(lesson.ability);
     const progress = getLessonProgress(lesson.id);
-    const completedToday = state.sessions.some(
+    const todaySessions = state.sessions.filter(
       (session) =>
         session.lessonId === lesson.id &&
         !session.isReview &&
         todayKey(new Date(session.createdAt)) === todayKey(),
     );
+    const fullCompletedToday = todaySessions.some((session) => session.mode === "full");
+    const shortCompletedToday = todaySessions.some((session) => session.mode === "short");
+    const draft = getPracticeDraft();
+    const hasDraft = draft?.lessonId === lesson.id;
     const due = getDueReviews();
     return `<div class="page">
       ${topbar()}
       <section class="today-hero ${ability.color} fade-in">
         <div class="today-hero-top">
           ${abilityChip(ability)}
-          <span class="today-time">${completedToday ? "今日已完成" : "今日推荐 · 15 分钟"}</span>
+          <span class="today-time">${fullCompletedToday ? "今日完整练已完成" : shortCompletedToday ? "今日已短练" : "今日推荐"}</span>
         </div>
         <h1>${esc(lesson.title)}</h1>
         <p>${esc(lesson.subtitle)}</p>
         <blockquote>${esc(lesson.goldLine)}</blockquote>
         <div class="today-rule"><span>今日规则</span>${esc(ability.rule)}</div>
-        <button class="primary-button hero-start" data-action="start-mode" data-id="${lesson.id}" data-mode="full">
-          ${completedToday ? "再练一遍" : "开始完整训练"} ${icon("chevron")}
-        </button>
-      </section>
-
-      <section class="section compact-section">
-        <div class="section-head"><div><h2>今天练多深</h2><p>最低 60 秒也算一次，不给自己设断签压力。</p></div></div>
-        ${modeButtons(lesson)}
+        ${
+          hasDraft
+            ? `<button class="primary-button hero-start" data-action="continue-draft">继续${draft.mode === "short" ? "短练" : "完整练"} ${icon("chevron")}</button>
+               <button class="hero-secondary" data-action="start-mode" data-id="${lesson.id}" data-mode="full">从头开始完整练</button>`
+            : shortCompletedToday && !fullCompletedToday
+              ? `<button class="primary-button hero-start" data-action="continue-after-short" data-id="${lesson.id}">继续完整练 ${icon("chevron")}</button>
+                 <button class="hero-secondary" data-action="start-mode" data-id="${lesson.id}" data-mode="short">再短练一遍</button>`
+              : `<button class="primary-button hero-start" data-action="start-mode" data-id="${lesson.id}" data-mode="full">
+                  ${fullCompletedToday ? "再完整练一遍" : "开始完整练 · 约 15 分钟"} ${icon("chevron")}
+                </button>
+                <button class="hero-secondary" data-action="start-mode" data-id="${lesson.id}" data-mode="short">${fullCompletedToday ? "再短练一遍 · 约 3 分钟" : "今天没空？先短练 · 约 3 分钟"}</button>`
+        }
       </section>
 
       <section class="section">
-        <div class="section-head"><div><h2>完整版怎么练</h2><p>一次只做一个动作，随时可以结束并保存。</p></div></div>
+        <div class="section-head"><div><h2>一条训练流程</h2><p>短练和完整练共用同一份素材；短练可随时继续到完整练。</p></div></div>
         <div class="training-path">
-          <div><span>01</span><strong>跟</strong><small>3 分钟跟读</small></div>
-          <div><span>02</span><strong>忆</strong><small>3 分钟回忆</small></div>
-          <div><span>03</span><strong>用</strong><small>6 分钟表达</small></div>
-          <div><span>04</span><strong>改</strong><small>3 分钟重说</small></div>
+          <div><span>01</span><strong>跟</strong><small>听与跟读</small></div>
+          <div><span>02</span><strong>忆</strong><small>关键词复述</small></div>
+          <div><span>03</span><strong>用</strong><small>场景表达</small></div>
+          <div><span>04</span><strong>改</strong><small>回听重说</small></div>
         </div>
       </section>
 
@@ -378,7 +416,7 @@
           <div><h3>${esc(ability.title)}：${esc(ability.tagline)}</h3><p>${esc(ability.description)}</p></div>
         </div>
       </section>
-      ${progress.quickCount > 0 && !progress.completed ? `<p class="subtle-note">你已经完成过 ${progress.quickCount} 次轻练。继续 5 分钟版本，就会进入正式训练进度。</p>` : ""}
+      ${progress.shortCount > 0 && !progress.completed ? `<p class="subtle-note">你已经短练过 ${progress.shortCount} 次。继续一次完整练，就会把这课标为已训练。</p>` : ""}
     </div>${bottomNav("today")}`;
   }
 
@@ -401,7 +439,7 @@
               </div>
               <h2>${esc(ability.title)}</h2>
               <p>${esc(ability.tagline)}</p>
-              <div class="ability-progress"><span><i style="width:${progress.percent}%"></i></span><small>${progress.complete} / ${progress.total}</small></div>
+              <div class="ability-progress"><span><i style="width:${progress.percent}%"></i></span><small>${progress.complete} / ${progress.total}${progress.short ? ` · ${progress.short} 次短练` : ""}</small></div>
               <div class="ability-card-rule">${esc(ability.rule)}</div>
             </button>`;
           })
@@ -423,13 +461,13 @@
         <h1>${esc(ability.title)}</h1>
         <p>${esc(ability.description)}</p>
         <blockquote>${esc(ability.rule)}</blockquote>
-        <div class="ability-progress"><span><i style="width:${progress.percent}%"></i></span><small>${progress.percent}%</small></div>
+        <div class="ability-progress"><span><i style="width:${progress.percent}%"></i></span><small>${progress.percent}%${progress.short ? ` · ${progress.short} 次短练` : ""}</small></div>
       </section>
       <div class="lesson-list">
         ${lessons
           .map((lesson) => {
             const p = getLessonProgress(lesson.id);
-            const stateLabel = p.completed ? "已训练" : p.quickCount ? "轻练过" : "未开始";
+            const stateLabel = p.completed ? "已训练" : p.shortCount ? "已短练" : "未完成";
             return `<button class="lesson-library-item" data-action="open-lesson" data-id="${lesson.id}">
               <span class="lesson-day">D${lesson.day}</span>
               <span class="lesson-copy"><strong>${esc(lesson.title)}</strong><small>${esc(lesson.goldLine)}</small></span>
@@ -445,8 +483,8 @@
   function lessonStatusLabel(lesson) {
     const p = getLessonProgress(lesson.id);
     if (p.completed) return p.mastery === "顺口" ? "顺口" : "已训练";
-    if (p.quickCount) return "轻练过";
-    return "未开始";
+    if (p.shortCount) return "已短练";
+    return "未完成";
   }
 
   function renderLessonDetail(lesson) {
@@ -486,9 +524,12 @@
         <p>${esc(lesson.apply.prompt)}</p>
         <div class="hint-chips">${lesson.apply.constraints.map((item) => `<span class="hint-chip">${esc(item)}</span>`).join("")}</div>
       </section>
-      <div class="bottom-cta"><button class="primary-button block" data-action="start-mode" data-id="${lesson.id}" data-mode="${progress.completed ? "standard" : "full"}">
-        ${progress.completed ? "加练这一课" : "开始这一课"} ${icon("chevron")}
-      </button></div>
+      <div class="bottom-cta">
+        <button class="primary-button block" data-action="start-mode" data-id="${lesson.id}" data-mode="full">
+          ${progress.completed ? "再完整练一遍" : "开始完整练"} ${icon("chevron")}
+        </button>
+        <button class="quiet-button block" style="margin-top:8px" data-action="start-mode" data-id="${lesson.id}" data-mode="short">先短练 · 约 3 分钟</button>
+      </div>
     </div>${bottomNav("library")}`;
   }
 
@@ -636,7 +677,7 @@
                   </button>`,
                 )
                 .join("")}</div>`
-            : `<div class="empty-state"><div class="empty-icon">${icon("mic")}</div><h3>还没有训练记录</h3><p>从今天 60 秒的门槛版开始，先让自己愿意打开。</p><button class="primary-button" data-action="navigate" data-route="today">去今日训练</button></div>`
+            : `<div class="empty-state"><div class="empty-icon">${icon("mic")}</div><h3>还没有训练记录</h3><p>从今天的 3 分钟短练开始，先让自己愿意打开。</p><button class="primary-button" data-action="navigate" data-route="today">去今日训练</button></div>`
         }
       </section>
       <section class="section">
@@ -696,7 +737,18 @@
         <button class="secondary-button" data-action="mark-used" data-id="${session.id}">${session.usedInReal ? "✓ 已在现场使用" : "标记已在现场使用"}</button>
         <button class="danger-button" data-action="delete-record" data-id="${session.id}">删除记录</button>
       </div>
-      ${lesson ? `<div class="bottom-cta"><button class="primary-button block" data-action="open-lesson" data-id="${lesson.id}">回到这一课加练 ${icon("chevron")}</button></div>` : ""}
+      ${
+        lesson
+          ? `<div class="bottom-cta">
+              ${
+                session.mode === "short" && !getLessonProgress(lesson.id).completed
+                  ? `<button class="primary-button block" data-action="continue-after-short" data-id="${lesson.id}">继续完整练 ${icon("chevron")}</button>
+                     <button class="quiet-button block" style="margin-top:8px" data-action="open-lesson" data-id="${lesson.id}">查看这一课</button>`
+                  : `<button class="primary-button block" data-action="open-lesson" data-id="${lesson.id}">回到这一课加练 ${icon("chevron")}</button>`
+              }
+            </div>`
+          : ""
+      }
     </div>${bottomNav("reviews")}`;
   }
 
@@ -755,26 +807,26 @@
 
   function practiceModeLabel(mode) {
     return {
-      quick: "60 秒门槛版",
-      standard: "5 分钟标准版",
-      full: "15 分钟完整版",
+      short: "约 3 分钟短练",
+      full: "约 15 分钟完整练",
       review: "间隔复习",
     }[mode] || "训练";
   }
 
-  function createPractice(lessonId, mode, isReview = false) {
+  function createPractice(
+    lessonId,
+    mode,
+    isReview = false,
+    { startStep = null, completedSteps = [] } = {},
+  ) {
     const lesson = getLesson(lessonId);
     if (!lesson) return null;
     return {
       lessonId,
       mode,
       isReview,
-      step:
-        isReview
-          ? "reviewQuick"
-          : mode === "quick"
-            ? "quick"
-            : "follow",
+      step: isReview ? "reviewQuick" : startStep || "follow",
+      completedSteps: [...completedSteps],
       status: getLessonProgress(lessonId).mastery === "new" ? "能用" : getLessonProgress(lessonId).mastery,
       notes: "",
       attempts: [],
@@ -790,12 +842,33 @@
     };
   }
 
-  function startMode(lessonId, mode, isReview = false) {
+  function startMode(lessonId, mode, isReview = false, options = {}) {
     cleanupPracticeMedia({ discard: true });
-    const practice = createPractice(lessonId, mode, isReview);
+    const practice = createPractice(lessonId, mode, isReview, options);
     if (!practice) return;
     state.practice = practice;
+    savePracticeDraft(practice);
     navigate("practice");
+  }
+
+  function resumePracticeDraft() {
+    const draft = getPracticeDraft();
+    if (!draft) {
+      showToast("没有找到上次进度");
+      return;
+    }
+    const step = draft.step === "review" ? "apply" : draft.step;
+    startMode(draft.lessonId, draft.mode, false, {
+      startStep: step,
+      completedSteps: draft.completedSteps || [],
+    });
+  }
+
+  function continueAfterShort(lessonId) {
+    startMode(lessonId, "full", false, {
+      startStep: "apply",
+      completedSteps: ["follow", "recall"],
+    });
   }
 
   function exitPractice() {
@@ -804,16 +877,15 @@
       navigate("today");
       return;
     }
-    if (
-      !practice.saving &&
-      practice.step !== "follow" &&
-      !window.confirm("本次训练还没有保存，退出会丢弃本次录音。确定退出吗？")
-    ) {
+    if (practice.recording && !window.confirm("当前录音还没有结束，退出会丢弃这一段录音。确定退出吗？")) {
       return;
     }
+    const draftSaved = practice.step !== "reviewQuick";
+    if (draftSaved) savePracticeDraft(practice);
     cleanupPracticeMedia({ discard: true });
     state.practice = null;
     navigate("today");
+    showToast(draftSaved ? "进度已保存，下次可以从这里继续" : "已退出本次复习");
   }
 
   function practiceHeader(lesson) {
@@ -821,7 +893,7 @@
     const ability = getAbility(lesson.ability);
     const stageOrder = ["follow", "recall", "apply", "review"];
     const active =
-      practice.step === "quick" || practice.step === "reviewQuick"
+      practice.step === "reviewQuick"
         ? 0
         : Math.max(0, stageOrder.indexOf(practice.step));
     return `<header class="backbar practice-header">
@@ -848,42 +920,6 @@
           </label>`,
         )
         .join("")}
-    </div>`;
-  }
-
-  function renderPracticeQuick() {
-    const practice = state.practice;
-    const lesson = getLesson(practice.lessonId);
-    const ability = getAbility(lesson.ability);
-    return `<div class="page page-practice">
-      ${practiceHeader(lesson)}
-      <main class="practice-shell">
-        <section class="practice-center fade-in">
-          <div class="practice-copy">
-            <div class="eyebrow">${esc(ability.title)} · 60 秒门槛版</div>
-            <h1>先读一句，<br>再说一句。</h1>
-            <p>今天不用学很多。读完金句，合上页面复述一次，就算完成轻练。</p>
-          </div>
-          <section class="gold-focus-card ${ability.color}">
-            <div class="content-label">今日金句</div>
-            <blockquote>${esc(lesson.goldLine)}</blockquote>
-            <button class="text-button" data-action="speak-gold">${icon("volume")} 听一遍</button>
-          </section>
-          <section class="content-card">
-            <div class="content-label">最小训练</div>
-            <p>大声读一遍金句，停两秒，再不看原文复述一遍。完成后选择“还生 / 能用 / 顺口”。</p>
-            <div class="quick-timer" id="practice-clock">${formatClock(60)}</div>
-            <button class="secondary-button block" data-action="start-timer" data-seconds="60">${icon("clock")} 开始 60 秒计时</button>
-          </section>
-          <form id="training-complete">
-            <section class="content-card">
-              <h3>这次的感觉</h3>
-              ${practiceStatusForm(practice)}
-            </section>
-            <div class="bottom-cta"><button class="primary-button block" type="submit">完成今日轻练 ${icon("check")}</button></div>
-          </form>
-        </section>
-      </main>
     </div>`;
   }
 
@@ -936,7 +972,7 @@
     const practice = state.practice;
     const lesson = getLesson(practice.lessonId);
     const ability = getAbility(lesson.ability);
-    const seconds = practice.mode === "standard" ? 120 : 180;
+    const seconds = practice.mode === "short" ? 90 : 180;
     return `<div class="page page-practice">
       ${practiceHeader(lesson)}
       <main class="practice-shell">
@@ -957,7 +993,7 @@
             ${stageTimerMarkup(seconds)}
           </section>
           <div class="bottom-cta"><button class="primary-button block" data-action="practice-next" data-next="recall">跟读完成，收起原文 ${icon("chevron")}</button></div>
-          <button class="text-button center-button" data-action="practice-next" data-next="apply">跳过跟读，直接表达</button>
+          <button class="text-button center-button" data-action="exit-practice">先练到这里，保存进度</button>
         </section>
       </main>
     </div>`;
@@ -990,6 +1026,7 @@
             <button class="secondary-button" data-action="practice-prev" data-prev="follow">回看材料</button>
             <button class="primary-button" data-action="practice-next" data-next="apply">我复述完了</button>
           </div>
+          <button class="text-button center-button" data-action="exit-practice">先练到这里，保存进度</button>
         </section>
       </main>
     </div>`;
@@ -1007,7 +1044,7 @@
     const practice = state.practice;
     const lesson = getLesson(practice.lessonId);
     const ability = getAbility(lesson.ability);
-    const maxSeconds = practice.mode === "standard" ? 60 : 90;
+    const maxSeconds = practice.mode === "short" ? 60 : 90;
     const recording = practice.recording;
     return `<div class="page page-practice">
       ${practiceHeader(lesson)}
@@ -1041,6 +1078,7 @@
           }
           <div class="notice neutral">${icon("shield")}<span>发声不舒服时停止练习。这里只训练表达与舒适度，不判断发声位置，也不做嗓音诊断。</span></div>
           <button class="text-button center-button" data-action="practice-prev" data-prev="recall">返回关键词</button>
+          <button class="text-button center-button" data-action="exit-practice">先练到这里，保存进度</button>
         </section>
       </main>
     </div>`;
@@ -1106,8 +1144,6 @@
       return "";
     }
     switch (state.practice.step) {
-      case "quick":
-        return renderPracticeQuick();
       case "reviewQuick":
         return renderPracticeReviewQuick();
       case "follow":
@@ -1149,16 +1185,28 @@
   function movePractice(next) {
     if (!state.practice) return;
     clearStageTimer();
+    const order = ["follow", "recall", "apply", "review"];
+    const previousStep = state.practice.step;
+    if (order.includes(previousStep)) {
+      const completed = new Set(state.practice.completedSteps || []);
+      completed.add(previousStep);
+      state.practice.completedSteps = [...completed];
+    }
     state.practice.step = next;
     state.practice.hintRevealed = false;
+    savePracticeDraft(state.practice);
     render();
   }
 
   function previousPractice(previous) {
     if (!state.practice) return;
     clearStageTimer();
+    state.practice.completedSteps = (state.practice.completedSteps || []).filter(
+      (step) => step !== state.practice.step,
+    );
     state.practice.step = previous;
     state.practice.hintRevealed = false;
+    savePracticeDraft(state.practice);
     render();
   }
 
@@ -1206,6 +1254,7 @@
         releaseMediaAfterRecording();
         state.practice.recording = false;
         state.practice.step = "review";
+        savePracticeDraft(state.practice);
         render();
       };
       recorder.onerror = () => {
@@ -1213,6 +1262,7 @@
         releaseMediaAfterRecording();
         state.practice.recording = false;
         state.practice.step = "review";
+        savePracticeDraft(state.practice);
         render();
       };
       setupAnalyser(stream);
@@ -1278,7 +1328,7 @@
   }
 
   function startRecordingTimers() {
-    const maxSeconds = state.practice.mode === "standard" ? 60 : 90;
+    const maxSeconds = state.practice.mode === "short" ? 60 : 90;
     clearInterval(state.recordTimer);
     clearInterval(state.volumeTimer);
     state.recordTimer = setInterval(() => {
@@ -1326,6 +1376,7 @@
     cleanupPracticeMedia({ discard: true });
     state.practice.recording = false;
     state.practice.step = "review";
+    savePracticeDraft(state.practice);
     render();
   }
 
@@ -1334,6 +1385,7 @@
     cleanupPracticeMedia();
     state.practice.step = "apply";
     state.practice.recordElapsed = 0;
+    savePracticeDraft(state.practice);
     render();
   }
 
@@ -1354,12 +1406,14 @@
       });
       URL.revokeObjectURL(localUrl);
       state.practice.step = "review";
+      savePracticeDraft(state.practice);
       render();
     };
     audio.onerror = () => {
       URL.revokeObjectURL(localUrl);
       state.practice.attempts.push({ durationSec: 0, blob: file, metrics: null });
       state.practice.step = "review";
+      savePracticeDraft(state.practice);
       render();
     };
     audio.src = localUrl;
@@ -1376,6 +1430,8 @@
     practice.notes = document.getElementById("training-notes")?.value.trim() || practice.notes;
     const createdAt = new Date().toISOString();
     const today = todayKey();
+    const completedSteps = new Set(practice.completedSteps || []);
+    if (practice.step !== "reviewQuick") completedSteps.add(practice.step);
     let progress = {
       ...getLessonProgress(lesson.id),
       lessonId: lesson.id,
@@ -1392,10 +1448,16 @@
       progress.nextReview = addDays(today, REVIEW_GAPS[progress.reviewStep]);
       progress.lastReviewDate = today;
     } else {
-      progress.completed = practice.mode !== "quick" || Boolean(progress.completed);
-      progress.reviewStep = 0;
-      progress.nextReview = addDays(today, 1);
-      progress.quickCount = (progress.quickCount || 0) + (practice.mode === "quick" ? 1 : 0);
+      if (practice.mode === "full") {
+        progress.completed = true;
+        progress.reviewStep = 0;
+        progress.nextReview = addDays(today, 1);
+        progress.lastFullTrainingDate = today;
+      } else {
+        progress.shortCount = (progress.shortCount || 0) + 1;
+        progress.lastShortTrainingDate = today;
+        if (!progress.completed) progress.nextReview = null;
+      }
       progress.lastTrainingDate = today;
     }
     const session = {
@@ -1412,15 +1474,17 @@
       status: practice.status,
       notes: practice.notes,
       createdAt,
+      completedSteps: [...completedSteps],
       durationSec: practice.attempts.reduce((sum, attempt) => sum + Number(attempt.durationSec || 0), 0),
       attempts: practice.attempts,
-      nextReview: progress.nextReview,
+      nextReview: progress.nextReview || null,
       usedInReal: false,
     };
     try {
       await putSession(session);
       await putProgress(progress);
       await refreshData();
+      clearPracticeDraft();
       cleanupPracticeMedia();
       state.practice = null;
       navigate(`record/${session.id}`);
@@ -1672,6 +1736,12 @@
         break;
       case "start-mode":
         startMode(id, trigger.dataset.mode, false);
+        break;
+      case "continue-draft":
+        resumePracticeDraft();
+        break;
+      case "continue-after-short":
+        continueAfterShort(id);
         break;
       case "start-review":
         startMode(id, "review", true);

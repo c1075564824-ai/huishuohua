@@ -2241,6 +2241,18 @@ audio {
   background: var(--green-light);
 }
 
+.hero-secondary {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  margin-top: 9px;
+  padding: 5px;
+  color: rgba(255, 250, 240, 0.7);
+  background: transparent;
+  font-size: 10px;
+}
+
 .ability-chip {
   display: inline-flex;
   align-items: center;

@@ -1,7 +1,7 @@
 {
   "name": "会说话",
   "short_name": "会说话",
-  "description": "四周期表达训练：说得清、说得实、说得当、说得稳。最低 60 秒，每天练一点。",
+  "description": "四周期表达训练：说得清、说得实、说得当、说得稳。3 分钟短练，可随时继续完整练。",
   "lang": "zh-CN",
   "start_url": "./index.html",
   "scope": "./",

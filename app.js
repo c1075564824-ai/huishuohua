@@ -6,6 +6,7 @@
   const toastEl = document.getElementById("toast");
   const lessonsById = new Map(DATA.lessons.map((lesson) => [lesson.id, lesson]));
   const abilitiesById = new Map(DATA.abilities.map((ability) => [ability.id, ability]));
+  const modulesById = new Map(DATA.moduleBank.map((module) => [module.id, module]));
   const REVIEW_GAPS = [1, 3, 7, 14, 30];
   const DRAFT_KEY = "hsh-v2-practice-draft";
   const ICONS = {
@@ -74,13 +75,16 @@
     routeId: "",
     sessions: [],
     progress: {},
+    moduleProgress: {},
     dataLoaded: false,
     storageAvailable: true,
     practice: null,
     libraryQuery: "",
-    libraryFilter: "all",
+    libraryFilter: "modules",
+    moduleReview: null,
     objectUrls: new Set(),
     stageTimer: null,
+    moduleTimer: null,
     recordTimer: null,
     volumeTimer: null,
     mediaRecorder: null,
@@ -100,7 +104,7 @@
 
   function openDB() {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open("huishuohua-local", 2);
+      const request = indexedDB.open("huishuohua-local", 3);
       request.onupgradeneeded = () => {
         const db = request.result;
         if (!db.objectStoreNames.contains("sessions")) {
@@ -109,6 +113,9 @@
         }
         if (!db.objectStoreNames.contains("progress")) {
           db.createObjectStore("progress", { keyPath: "lessonId" });
+        }
+        if (!db.objectStoreNames.contains("moduleProgress")) {
+          db.createObjectStore("moduleProgress", { keyPath: "moduleId" });
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -146,17 +153,29 @@
     idbRequest("progress", "readonly", (store) => store.getAll()).then((rows) =>
       Object.fromEntries(rows.map((row) => [row.lessonId, row])),
     );
+  const putModuleProgress = (progress) =>
+    idbRequest("moduleProgress", "readwrite", (store) => store.put(progress));
+  const getModuleProgressRows = () =>
+    idbRequest("moduleProgress", "readonly", (store) => store.getAll()).then((rows) =>
+      Object.fromEntries(rows.map((row) => [row.moduleId, row])),
+    );
 
   async function refreshData() {
     try {
-      const [sessions, progress] = await Promise.all([getSessions(), getProgress()]);
+      const [sessions, progress, moduleProgress] = await Promise.all([
+        getSessions(),
+        getProgress(),
+        getModuleProgressRows(),
+      ]);
       state.sessions = sessions || [];
       state.progress = progress || {};
+      state.moduleProgress = moduleProgress || {};
       state.storageAvailable = true;
     } catch (error) {
       console.warn("Local storage unavailable", error);
       state.sessions = [];
       state.progress = {};
+      state.moduleProgress = {};
       state.storageAvailable = false;
     } finally {
       state.dataLoaded = true;
@@ -205,6 +224,16 @@
     return lessonsById.get(id);
   }
 
+  function getModule(id) {
+    return modulesById.get(id);
+  }
+
+  function getLessonModules(lessonId) {
+    return (DATA.lessonModuleMap[lessonId] || [])
+      .map((id) => getModule(id))
+      .filter(Boolean);
+  }
+
   function getLessonProgress(id) {
     return (
       state.progress[id] || {
@@ -217,6 +246,18 @@
         mastery: "new",
         nextReview: null,
         lastPracticeDate: null,
+      }
+    );
+  }
+
+  function getModuleProgress(moduleId) {
+    return (
+      state.moduleProgress[moduleId] || {
+        moduleId,
+        reviewStep: 0,
+        mastery: "new",
+        nextReview: null,
+        practiceCount: 0,
       }
     );
   }
@@ -244,6 +285,7 @@
         mode: practice.mode,
         step,
         completedSteps: [...completed],
+        moduleIds: practice.moduleIds || [],
         status: practice.status,
         updatedAt: new Date().toISOString(),
       }),
@@ -258,6 +300,13 @@
     const today = todayKey();
     return Object.values(state.progress)
       .filter((progress) => progress.completed && progress.nextReview && progress.nextReview <= today)
+      .sort((a, b) => String(a.nextReview).localeCompare(String(b.nextReview)));
+  }
+
+  function getDueModules() {
+    const today = todayKey();
+    return Object.values(state.moduleProgress)
+      .filter((progress) => progress.nextReview && progress.nextReview <= today)
       .sort((a, b) => String(a.nextReview).localeCompare(String(b.nextReview)));
   }
 
@@ -313,7 +362,7 @@
 
   function topbar() {
     return `<header class="topbar">
-      <div class="brand"><span class="brand-mark">${icon("logo")}</span><span class="brand-name">会说话 <small class="version-tag">V2.1</small></span></div>
+      <div class="brand"><span class="brand-mark">${icon("logo")}</span><span class="brand-name">会说话 <small class="version-tag">V2.2</small></span></div>
       <div class="topbar-tools">
         <span class="date-label">${formatDate(todayKey())}</span>
         <button class="icon-button ghost compact" data-action="open-library" aria-label="搜索素材">${icon("search")}</button>
@@ -370,6 +419,8 @@
     const draft = getPracticeDraft();
     const hasDraft = draft?.lessonId === lesson.id;
     const due = getDueReviews();
+    const dueModules = getDueModules();
+    const lessonModules = getLessonModules(lesson.id);
     return `<div class="page">
       ${topbar()}
       <section class="today-hero fade-in">
@@ -396,17 +447,23 @@
       </section>
 
       <div class="today-route" aria-label="训练流程">
-        <span><strong>跟</strong>节奏</span><i></i><span><strong>忆</strong>重点</span><i></i><span><strong>用</strong>场景</span><i></i><span><strong>改</strong>一处</span>
+        <span><strong>跟</strong>节奏</span><i></i><span><strong>背</strong>模块</span><i></i><span><strong>用</strong>场景</span><i></i><span><strong>改</strong>一处</span>
       </div>
 
-      ${due.length ? `<button class="today-review-line" data-action="navigate" data-route="reviews">
-        ${icon("refresh")} 今天有 ${due.length} 个内容该复习 ${icon("chevron")}
+      <div class="today-modules">
+        <span class="today-modules-label">今日背模块</span>
+        ${lessonModules.map((module) => `<span class="today-module-chip">${esc(module.title)}</span>`).join("")}
+        <small>短练背 1 个，完整练背 3 个</small>
+      </div>
+
+      ${due.length || dueModules.length ? `<button class="today-review-line" data-action="navigate" data-route="reviews">
+        ${icon("refresh")} 今天有 ${dueModules.length} 个模块、${due.length} 节课待复习 ${icon("chevron")}
       </button>` : ""}
 
       <div class="home-meta-line">
         <span>已训练 ${completedLessons()}/28</span>
         <span>本周 ${weekPracticeDays()} 天</span>
-        <span>待复习 ${due.length}</span>
+        <span>待复习 ${due.length + dueModules.length}</span>
       </div>
       ${progress.shortCount > 0 && !progress.completed ? `<p class="subtle-note">你已经短练过 ${progress.shortCount} 次。继续一次完整练，就会把这课标为已训练。</p>` : ""}
     </div>${bottomNav("today")}`;
@@ -513,6 +570,18 @@
         <p>${esc(lesson.structure.cue)}</p>
       </section>
       <section class="content-card">
+        <div class="content-label">本课背诵模块</div>
+        <div class="lesson-module-list">
+          ${getLessonModules(lesson.id)
+            .map(
+              (module) => `<button class="lesson-module-row" data-action="open-module" data-id="${module.id}">
+                <span><strong>${esc(module.title)}</strong><small>${esc(module.card.core)}</small></span>${icon("chevron")}
+              </button>`,
+            )
+            .join("")}
+        </div>
+      </section>
+      <section class="content-card">
         <div class="content-label">迁移任务</div>
         <p>${esc(lesson.apply.prompt)}</p>
         <div class="hint-chips">${lesson.apply.constraints.map((item) => `<span class="hint-chip">${esc(item)}</span>`).join("")}</div>
@@ -526,11 +595,204 @@
     </div>${bottomNav("training")}`;
   }
 
+  function renderModuleDetail(module) {
+    if (!module) return renderLibrary();
+    const progress = getModuleProgress(module.id);
+    return `<div class="page">
+      ${backbar("背诵模块")}
+      <header class="lesson-detail-head fade-in">
+        <span class="detail-kicker">${icon("book")} ${esc(module.category)} · ${esc(module.type)}</span>
+        <h1>${esc(module.title)}</h1>
+        <p class="detail-summary">${esc(module.scene)}</p>
+        <div class="detail-meta">
+          <span class="meta-pill">${icon("calendar")} ${progress.mastery === "new" ? "未背" : progress.mastery}</span>
+          ${progress.nextReview ? `<span class="meta-pill">${icon("refresh")} ${formatDate(progress.nextReview)}复习</span>` : ""}
+        </div>
+      </header>
+      <section class="module-card-full">
+        <div class="module-line"><span>缓冲</span><p>${esc(module.card.buffer)}</p></div>
+        <div class="module-line"><span>核心</span><p>${esc(module.card.core)}</p></div>
+        <div class="module-line"><span>推进</span><p>${esc(module.card.push)}</p></div>
+      </section>
+      <section class="content-card">
+        <div class="content-label">可替换模块</div>
+        <div class="hint-chips">${module.card.slots.map((slot) => `<span class="hint-chip">${esc(slot)}</span>`).join("")}</div>
+        <div class="variant-list">${module.card.variants.map((variant) => `<p>${esc(variant)}</p>`).join("")}</div>
+        <button class="text-button" data-action="speak-module" data-id="${module.id}">${icon("volume")} 听一遍</button>
+      </section>
+      <div class="notice neutral">${icon("info")}<span>先看场景自己说，再揭晓答案。背完必须替换人物、事情或场合，不能只背原句。</span></div>
+      <div class="bottom-cta"><button class="primary-button block" data-action="start-module-review" data-id="${module.id}">背一次这组模块 ${icon("chevron")}</button></div>
+    </div>${bottomNav("training")}`;
+  }
+
+  function startModuleReview(moduleId) {
+    cleanupPracticeMedia({ discard: true });
+    const progress = getModuleProgress(moduleId);
+    state.moduleReview = {
+      moduleId,
+      firstTime: progress.mastery === "new",
+      revealed: false,
+      status: progress.mastery === "new" ? "能用" : progress.mastery,
+      completed: false,
+      nextReview: null,
+    };
+    navigate("module-review");
+  }
+
+  function moduleStatusForm(status) {
+    return `<div class="mastery-options">
+      ${[
+        ["还生", "需要看提示"],
+        ["会说", "给场景能说"],
+        ["能用", "换场景也能用"],
+      ]
+        .map(
+          ([value, label]) => `<label class="${status === value ? "active" : ""}">
+            <input type="radio" name="module-status" value="${value}" ${status === value ? "checked" : ""}>
+            <strong>${value}</strong><small>${label}</small>
+          </label>`,
+        )
+        .join("")}
+    </div>`;
+  }
+
+  function startModuleTimer(seconds) {
+    clearInterval(state.moduleTimer);
+    let left = seconds;
+    const update = () => {
+      const clock = document.getElementById("module-clock");
+      if (clock) clock.textContent = formatClock(left);
+    };
+    update();
+    state.moduleTimer = setInterval(() => {
+      left -= 1;
+      update();
+      if (left <= 0) {
+        clearInterval(state.moduleTimer);
+        state.moduleTimer = null;
+        showToast("时间到，可以揭晓或直接说出你的版本");
+      }
+    }, 1000);
+  }
+
+  function renderModuleReview() {
+    const review = state.moduleReview;
+    if (!review) return renderReviews();
+    const module = getModule(review.moduleId);
+    if (!module) return renderReviews();
+    if (review.completed) {
+      return `<div class="page page-practice">
+        ${backbar("背诵完成")}
+        <main class="practice-shell">
+          <section class="practice-center completion-screen">
+            <span class="completion-mark">${icon("check")}</span>
+            <div class="eyebrow">这组模块背完了</div>
+            <h1>${esc(module.title)}</h1>
+            <blockquote class="gold-quote small">${esc(module.card.core)}</blockquote>
+            <div class="completion-meta"><span>状态：${esc(review.status)}</span><span>下次复习：${formatDate(review.nextReview)}</span></div>
+            <div class="bottom-cta"><button class="primary-button block" data-action="finish-module-review">完成 ${icon("check")}</button></div>
+            <button class="quiet-button block" style="margin-top:9px" data-action="start-module-review" data-id="${module.id}">再背一遍</button>
+          </section>
+        </main>
+      </div>`;
+    }
+    return `<div class="page page-practice">
+      ${backbar(module.category)}
+      <main class="practice-shell">
+        <section class="practice-center fade-in">
+          <div class="practice-copy">
+            <div class="eyebrow">背模块 · 45 秒</div>
+            <h1>${esc(module.title)}</h1>
+            <p>${esc(module.scene)}</p>
+          </div>
+          <section class="module-recall-card">
+            <div class="content-label">先说这三句</div>
+            <div class="module-labels"><span>1 缓冲</span><span>2 核心</span><span>3 推进</span></div>
+            <div class="hint-chips">${module.keywords.map((word) => `<span class="hint-chip">${esc(word)}</span>`).join("")}</div>
+            ${review.revealed ? `<div class="module-card-full">
+              <div class="module-line"><span>缓冲</span><p>${esc(module.card.buffer)}</p></div>
+              <div class="module-line"><span>核心</span><p>${esc(module.card.core)}</p></div>
+              <div class="module-line"><span>推进</span><p>${esc(module.card.push)}</p></div>
+            </div>` : `<div class="module-hidden">先自己说，再揭晓答案。</div>`}
+            <div class="quick-timer" id="module-clock">${formatClock(45)}</div>
+            <div class="button-row">
+              <button class="secondary-button" data-action="start-module-timer">开始 45 秒</button>
+              <button class="primary-button" data-action="reveal-module-answer">${review.revealed ? "收起答案" : "揭晓答案"}</button>
+            </div>
+          </section>
+          <form id="module-review-complete">
+            <section class="content-card">
+              <h3>这次能调用吗</h3>
+              ${moduleStatusForm(review.status)}
+            </section>
+            <div class="bottom-cta"><button class="primary-button block" type="submit">完成这次背诵 ${icon("check")}</button></div>
+          </form>
+        </section>
+      </main>
+    </div>`;
+  }
+
+  async function completeModuleReview() {
+    const review = state.moduleReview;
+    if (!review) return;
+    const module = getModule(review.moduleId);
+    const selected = document.querySelector('input[name="module-status"]:checked');
+    review.status = selected?.value || review.status;
+    const current = getModuleProgress(module.id);
+    const reviewStep =
+      review.status === "还生"
+        ? 0
+        : review.firstTime
+          ? 0
+          : Math.min((current.reviewStep || 0) + 1, REVIEW_GAPS.length - 1);
+    const progress = {
+      ...current,
+      moduleId: module.id,
+      mastery: review.status,
+      reviewStep,
+      nextReview: addDays(todayKey(), REVIEW_GAPS[reviewStep]),
+      practiceCount: Number(current.practiceCount || 0) + 1,
+      lastReviewDate: todayKey(),
+    };
+    try {
+      await putModuleProgress(progress);
+      state.moduleProgress[module.id] = progress;
+      clearInterval(state.moduleTimer);
+      state.moduleTimer = null;
+      review.completed = true;
+      review.nextReview = progress.nextReview;
+      render();
+      showToast("模块背诵已记录");
+    } catch (error) {
+      console.error(error);
+      showToast("保存失败");
+    }
+  }
+
   function filteredLibrary() {
     const query = state.libraryQuery.trim().toLowerCase();
+    const moduleRows = DATA.moduleBank
+      .filter((module) => {
+        if (!["all", "modules"].includes(state.libraryFilter)) return false;
+        if (!query) return true;
+        return [
+          module.title,
+          module.scene,
+          module.category,
+          module.type,
+          ...module.keywords,
+          module.card.buffer,
+          module.card.core,
+          module.card.push,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      })
+      .map((module) => ({ type: "module", module }));
     const lessonRows = DATA.lessons
       .filter((lesson) => {
-        if (state.libraryFilter === "phrases") return false;
+        if (!["all", "lessons"].includes(state.libraryFilter)) return false;
         if (!query) return true;
         const ability = getAbility(lesson.ability);
         return [
@@ -552,13 +814,13 @@
         group.items.map((item) => ({ type: "phrase", group, item })),
       )
       .filter((row) => {
-        if (state.libraryFilter === "lessons") return false;
+        if (!["all", "phrases"].includes(state.libraryFilter)) return false;
         if (!query) return true;
         return `${row.group.category} ${row.item.text} ${row.item.use}`
           .toLowerCase()
           .includes(query);
       });
-    return [...lessonRows, ...phraseRows];
+    return [...moduleRows, ...lessonRows, ...phraseRows];
   }
 
   function libraryResultsMarkup() {
@@ -568,6 +830,15 @@
     }
     return rows
       .map((row) => {
+        if (row.type === "module") {
+          const module = row.module;
+          const progress = getModuleProgress(module.id);
+          return `<button class="library-result module-result" data-action="open-module" data-id="${module.id}">
+            <span class="mini-icon green">${icon("book")}</span>
+            <span><strong>${esc(module.title)}</strong><small>${esc(module.scene)}</small><em>${esc(module.category)} · ${esc(module.type)} · ${progress.mastery === "new" ? "未背" : progress.mastery}</em></span>
+            ${icon("chevron")}
+          </button>`;
+        }
         if (row.type === "lesson") {
           const lesson = row.lesson;
           const ability = getAbility(lesson.ability);
@@ -593,15 +864,16 @@
       <header class="page-heading fade-in">
         <div class="eyebrow">训练</div>
         <h1>找一句话，<br>练成自己的。</h1>
-        <p>${DATA.lessons.length} 个训练包与 ${totalPhrases} 条实用表达。</p>
+        <p>${DATA.moduleBank.length} 张背诵模块、${DATA.lessons.length} 个训练包与 ${totalPhrases} 条补充表达。</p>
       </header>
       ${trainingTabs("library")}
       <div class="library-search">${icon("search")}<input id="library-search" type="search" value="${esc(state.libraryQuery)}" placeholder="搜索：会议、夸奖、敬酒、故事……"></div>
       <div class="filter-chips" id="library-filters">
         ${[
           ["all", "全部"],
+          ["modules", "背诵模块"],
           ["lessons", "训练素材"],
-          ["phrases", "实用句库"],
+          ["phrases", "补充句库"],
         ]
           .map(
             ([value, label]) => `<button class="filter-chip ${state.libraryFilter === value ? "active" : ""}" data-action="library-filter" data-value="${value}">${label}</button>`,
@@ -624,23 +896,30 @@
 
   function renderReviews() {
     const due = getDueReviews();
-    const totalSeconds = state.sessions.reduce(
-      (sum, session) => sum + Number(session.durationSec || 0),
-      0,
-    );
+    const dueModules = getDueModules();
     return `<div class="page">
       ${topbar()}
       <header class="page-heading fade-in">
         <div class="eyebrow">复习</div>
         <h1>把学过的，<br>重新想起来。</h1>
-        <p>到期复习每次只花 30～60 秒。先回忆，再看答案，不重复整堂课。</p>
+        <p>先背到期模块，再复习课程。每次只用 30～60 秒重新调取，不重复整堂课。</p>
       </header>
       <section class="due-panel">
-        <div class="section-head"><div><h2>今天该复习</h2><p>${due.length ? "先想，再看提示。" : "暂时没有到期内容。"}</p></div><span class="due-count">${due.length}</span></div>
+        <div class="section-head"><div><h2>今天该复习</h2><p>${due.length + dueModules.length ? "先自己说，再看提示。" : "暂时没有到期内容。"}</p></div><span class="due-count">${due.length + dueModules.length}</span></div>
         ${
-          due.length
-            ? due
-                .slice(0, 6)
+          due.length || dueModules.length
+            ? `${dueModules
+                .slice(0, 3)
+                .map((progress) => {
+                  const module = getModule(progress.moduleId);
+                  if (!module) return "";
+                  return `<button class="due-item module-due" data-action="start-module-review" data-id="${module.id}">
+                    <span><strong>${esc(module.title)}</strong><small> ${esc(module.scene)} · ${formatDate(progress.nextReview)}到期</small></span>
+                    ${icon("chevron")}
+                  </button>`;
+                })
+                .join("")}${due
+                .slice(0, 3)
                 .map((progress) => {
                   const lesson = getLesson(progress.lessonId);
                   if (!lesson) return "";
@@ -649,13 +928,13 @@
                     ${icon("chevron")}
                   </button>`;
                 })
-                .join("")
+                .join("")}`
             : `<div class="empty-mini"><span>${icon("check")}</span><p>今天没有欠账。可以继续学新的内容，或给已有内容加练。</p></div>`
         }
       </section>
       <div class="two-stat-card">
         <div><strong>${state.sessions.length}</strong><span>练习次数</span></div>
-        <div><strong>${Math.max(0, Math.round(totalSeconds / 60))}</strong><span>累计分钟</span></div>
+        <div><strong>${Object.keys(state.moduleProgress).length}</strong><span>已背模块</span></div>
         <div><strong>${weekPracticeDays()}</strong><span>本周天数</span></div>
       </div>
       <section class="section">
@@ -727,6 +1006,11 @@
           ? `<section class="content-card"><div class="content-label">今天留下的内容</div><p class="gold-quote small">${esc(lesson.goldLine)}</p><p><strong style="color:var(--ink)">结构：</strong>${esc(lesson.structure.name)}</p><p><strong style="color:var(--ink)">迁移任务：</strong>${esc(lesson.apply.prompt)}</p></section>`
           : ""
       }
+      ${
+        session.moduleTitles?.length
+          ? `<section class="content-card"><div class="content-label">本次背的模块</div><div class="hint-chips">${session.moduleTitles.map((title) => `<span class="hint-chip">${esc(title)}</span>`).join("")}</div></section>`
+          : ""
+      }
       <div class="button-row">
         <button class="secondary-button" data-action="mark-used" data-id="${session.id}">${session.usedInReal ? "✓ 已在现场使用" : "标记已在现场使用"}</button>
         <button class="danger-button" data-action="delete-record" data-id="${session.id}">删除记录</button>
@@ -775,6 +1059,8 @@
 
   function cleanupPracticeMedia({ discard = false } = {}) {
     clearStageTimer();
+    clearInterval(state.moduleTimer);
+    state.moduleTimer = null;
     clearInterval(state.recordTimer);
     clearInterval(state.volumeTimer);
     state.recordTimer = null;
@@ -811,16 +1097,21 @@
     lessonId,
     mode,
     isReview = false,
-    { startStep = null, completedSteps = [] } = {},
+    { startStep = null, completedSteps = [], moduleIds = null } = {},
   ) {
     const lesson = getLesson(lessonId);
     if (!lesson) return null;
+    const lessonModules = getLessonModules(lessonId);
+    const selectedModules =
+      moduleIds ||
+      (mode === "short" ? lessonModules.slice(0, 1) : lessonModules);
     return {
       lessonId,
       mode,
       isReview,
       step: isReview ? "reviewQuick" : startStep || "follow",
       completedSteps: [...completedSteps],
+      moduleIds: selectedModules.map((module) => module.id),
       status: getLessonProgress(lessonId).mastery === "new" ? "能用" : getLessonProgress(lessonId).mastery,
       notes: "",
       attempts: [],
@@ -856,13 +1147,16 @@
     startMode(draft.lessonId, draft.mode, false, {
       startStep: step,
       completedSteps: draft.completedSteps || [],
+      moduleIds: (draft.moduleIds || []).map((id) => getModule(id)).filter(Boolean),
     });
   }
 
   function continueAfterShort(lessonId) {
+    const remainingModules = getLessonModules(lessonId).slice(1);
     startMode(lessonId, "full", false, {
-      startStep: "apply",
+      startStep: remainingModules.length ? "recall" : "apply",
       completedSteps: ["follow", "recall"],
+      moduleIds: remainingModules,
     });
   }
 
@@ -1014,28 +1308,50 @@
     const practice = state.practice;
     const lesson = getLesson(practice.lessonId);
     const ability = getAbility(lesson.ability);
+    const modules = (practice.moduleIds || []).map((id) => getModule(id)).filter(Boolean);
     return `<div class="page page-practice">
       ${practiceHeader(lesson)}
       <main class="practice-shell">
         <section class="practice-center fade-in">
           <div class="practice-copy">
-            <div class="eyebrow">第 2 步 · 忆</div>
-            <h1>收起原文，<br>先把它想起来。</h1>
-            <p>不要重新阅读。看着关键词，用自己的话复述 30～60 秒。说得不完整也没关系。</p>
+            <div class="eyebrow">第 2 步 · 背</div>
+            <h1>不背长稿，<br>背可迁移的三句话。</h1>
+            <p>先看场景，再说出缓冲、核心、推进。完整练背 ${modules.length} 组，短练只背第一组。</p>
           </div>
-          <section class="recall-card ${ability.color}">
-            <div class="content-label">只给你这些线索</div>
-            <div class="hint-chips large">${lesson.keywords.map((word) => `<span class="hint-chip">${esc(word)}</span>`).join("")}</div>
-            ${stageTimerMarkup(120)}
+          <div class="module-practice-list">
+            ${modules
+              .map(
+                (module, index) => `<section class="module-practice-card">
+                  <div class="module-practice-head"><span>模块 ${index + 1}</span><small>${esc(module.type)}</small></div>
+                  <h3>${esc(module.title)}</h3>
+                  <p>${esc(module.scene)}</p>
+                  <div class="hint-chips">${module.keywords.map((word) => `<span class="hint-chip">${esc(word)}</span>`).join("")}</div>
+                  ${
+                    practice.hintRevealed
+                      ? `<div class="module-answer">
+                          <p><strong>缓冲</strong>${esc(module.card.buffer)}</p>
+                          <p><strong>核心</strong>${esc(module.card.core)}</p>
+                          <p><strong>推进</strong>${esc(module.card.push)}</p>
+                          <small>替换槽位：${module.card.slots.map((slot) => esc(slot)).join("｜")}</small>
+                        </div>`
+                      : `<div class="module-hidden">先用自己的话说一遍，再看参考答案。</div>`
+                  }
+                </section>`,
+              )
+              .join("")}
+          </div>
+          <section class="content-card flat">
+            <div class="content-label">回忆计时</div>
+            ${stageTimerMarkup(practice.mode === "short" ? 60 : 120)}
           </section>
           ${
             practice.hintRevealed
-              ? `<section class="content-card"><div class="content-label">提示</div><blockquote class="gold-quote small">${esc(lesson.goldLine)}</blockquote><p>${esc(lesson.structure.name)}：${lesson.structure.steps.map((step) => esc(step)).join(" → ")}</p></section>`
-              : `<button class="quiet-button block" data-action="reveal-hint">想不起来，只揭晓金句</button>`
+              ? `<div class="notice neutral">${icon("info")}<span>现在再合上答案，用自己的话把三句连起来说一遍。</span></div>`
+              : `<button class="quiet-button block" data-action="reveal-hint">先说一遍，再揭晓参考答案</button>`
           }
           <div class="button-row">
             <button class="secondary-button" data-action="practice-prev" data-prev="follow">回看材料</button>
-            <button class="primary-button" data-action="practice-next" data-next="apply">我复述完了</button>
+            <button class="primary-button" data-action="practice-next" data-next="apply">我背完了</button>
           </div>
           <button class="text-button center-button" data-action="exit-practice">先练到这里，保存进度</button>
         </section>
@@ -1167,6 +1483,7 @@
           <blockquote class="gold-quote small">${esc(lesson.goldLine)}</blockquote>
           <div class="completion-meta">
             <span>状态：${esc(practice.status)}</span>
+            <span>背了 ${practice.moduleIds?.length || 0} 组模块</span>
             <span>${progress.nextReview ? `下次复习：${formatDate(progress.nextReview)}` : "短练已记录"}</span>
           </div>
           <div class="bottom-cta">
@@ -1523,6 +1840,10 @@
       status: practice.status,
       notes: practice.notes,
       createdAt,
+      moduleIds: practice.moduleIds || [],
+      moduleTitles: (practice.moduleIds || [])
+        .map((moduleId) => getModule(moduleId)?.title)
+        .filter(Boolean),
       completedSteps: [...completedSteps],
       durationSec: practice.attempts.reduce((sum, attempt) => sum + Number(attempt.durationSec || 0), 0),
       attempts: practice.attempts,
@@ -1532,6 +1853,19 @@
     try {
       await putSession(session);
       await putProgress(progress);
+      for (const moduleId of practice.moduleIds || []) {
+        const current = getModuleProgress(moduleId);
+        const moduleProgress = {
+          ...current,
+          moduleId,
+          mastery: practice.status,
+          practiceCount: Number(current.practiceCount || 0) + 1,
+          lastPracticeDate: today,
+          reviewStep: 0,
+          nextReview: addDays(today, 1),
+        };
+        await putModuleProgress(moduleProgress);
+      }
       await refreshData();
       clearPracticeDraft();
       cleanupPracticeMedia();
@@ -1611,6 +1945,7 @@
         note: "此文件可能包含个人录音，请妥善保管。",
         sessions,
         progress: Object.values(state.progress),
+        moduleProgress: Object.values(state.moduleProgress),
       };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -1634,6 +1969,9 @@
       const payload = JSON.parse(await file.text());
       const sessions = Array.isArray(payload) ? payload : payload.sessions || [];
       const progressRows = Array.isArray(payload.progress) ? payload.progress : [];
+      const moduleProgressRows = Array.isArray(payload.moduleProgress)
+        ? payload.moduleProgress
+        : [];
       let imported = 0;
       let skipped = 0;
       for (const raw of sessions) {
@@ -1657,6 +1995,11 @@
           await putProgress(progress);
         }
       }
+      for (const progress of moduleProgressRows) {
+        if (progress?.moduleId && getModule(progress.moduleId)) {
+          await putModuleProgress(progress);
+        }
+      }
       await refreshData();
       render();
       showToast(
@@ -1676,9 +2019,11 @@
       await Promise.all([
         idbRequest("sessions", "readwrite", (store) => store.clear()),
         idbRequest("progress", "readwrite", (store) => store.clear()),
+        idbRequest("moduleProgress", "readwrite", (store) => store.clear()),
       ]);
       state.sessions = [];
       state.progress = {};
+      state.moduleProgress = {};
       localStorage.removeItem("hsh-v2-daily");
       render();
       showToast("本机数据已清空");
@@ -1755,6 +2100,12 @@
       case "lesson":
         html = renderLessonDetail(getLesson(state.routeId));
         break;
+      case "module":
+        html = renderModuleDetail(getModule(state.routeId));
+        break;
+      case "module-review":
+        html = renderModuleReview();
+        break;
       case "library":
         html = renderLibrary();
         break;
@@ -1798,6 +2149,27 @@
       case "open-lesson":
         navigate(`lesson/${id}`);
         break;
+      case "open-module":
+        navigate(`module/${id}`);
+        break;
+      case "start-module-review":
+        startModuleReview(id);
+        break;
+      case "start-module-timer":
+        startModuleTimer(45);
+        break;
+      case "reveal-module-answer":
+        if (state.moduleReview) {
+          state.moduleReview.revealed = !state.moduleReview.revealed;
+          render();
+        }
+        break;
+      case "finish-module-review":
+        clearInterval(state.moduleTimer);
+        state.moduleTimer = null;
+        state.moduleReview = null;
+        navigate("reviews");
+        break;
       case "start-mode":
         startMode(id, trigger.dataset.mode, false);
         break;
@@ -1826,6 +2198,13 @@
       case "speak-gold": {
         const lesson = getLesson(state.practice?.lessonId);
         if (lesson) speakText(lesson.goldLine);
+        break;
+      }
+      case "speak-module": {
+        const module = getModule(id);
+        if (module) {
+          speakText(`${module.card.buffer}。${module.card.core}。${module.card.push}`);
+        }
         break;
       }
       case "start-timer":
@@ -1889,6 +2268,10 @@
       event.preventDefault();
       completeTraining();
     }
+    if (event.target.id === "module-review-complete") {
+      event.preventDefault();
+      completeModuleReview();
+    }
   });
 
   app.addEventListener("input", (event) => {
@@ -1905,6 +2288,12 @@
       });
       if (state.practice) state.practice.status = event.target.value;
     }
+    if (event.target.name === "module-status") {
+      document.querySelectorAll(".mastery-options label").forEach((label) => {
+        label.classList.toggle("active", label.querySelector("input")?.checked);
+      });
+      if (state.moduleReview) state.moduleReview.status = event.target.value;
+    }
     if (event.target.id === "audio-file-input") {
       loadAudioFile(event.target.files?.[0]);
     }
@@ -1920,6 +2309,11 @@
     if (state.practice && !next.startsWith("#/practice")) {
       cleanupPracticeMedia({ discard: true });
       state.practice = null;
+    }
+    if (state.moduleReview && !next.startsWith("#/module-review")) {
+      clearInterval(state.moduleTimer);
+      state.moduleTimer = null;
+      state.moduleReview = null;
     }
     render();
   });

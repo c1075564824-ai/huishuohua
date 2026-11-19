@@ -2447,6 +2447,229 @@ audio {
   font-size: 10px;
 }
 
+.today-modules {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.today-modules-label {
+  color: var(--ink-soft);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.today-module-chip {
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: var(--green-mid);
+  background: var(--green-light);
+  font-size: 9px;
+}
+
+.today-modules small {
+  flex-basis: 100%;
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+.module-practice-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 17px;
+}
+
+.module-practice-card,
+.module-card-full,
+.module-recall-card {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.module-practice-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--green-mid);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.module-practice-head small {
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+
+.module-practice-card h3 {
+  margin-top: 7px;
+  font-family: var(--font-display);
+  font-size: 19px;
+}
+
+.module-practice-card > p {
+  margin-top: 5px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.module-hidden {
+  margin-top: 13px;
+  padding: 15px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+  color: var(--ink-faint);
+  background: #faf8f1;
+  font-size: 10px;
+  text-align: center;
+}
+
+.module-answer {
+  display: grid;
+  gap: 10px;
+  margin-top: 13px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.module-answer p {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 8px;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.module-answer strong {
+  color: var(--green-mid);
+  font-family: var(--font-sans);
+  font-size: 9px;
+}
+
+.module-answer small {
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
+.module-card-full {
+  display: grid;
+  gap: 13px;
+  margin-top: 16px;
+  border-left: 3px solid var(--green-mid);
+}
+
+.module-line {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 10px;
+}
+
+.module-line span {
+  padding-top: 3px;
+  color: var(--green-mid);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.module-line p {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.variant-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.variant-list p {
+  padding-left: 10px;
+  border-left: 2px solid var(--paper-strong);
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.module-recall-card {
+  margin-top: 17px;
+}
+
+.module-labels {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin: 11px 0;
+}
+
+.module-labels span {
+  padding: 8px 4px;
+  border-radius: 9px;
+  color: var(--green-mid);
+  background: var(--green-light);
+  font-size: 9px;
+  text-align: center;
+}
+
+.module-due strong::before {
+  margin-right: 6px;
+  color: var(--green-mid);
+  content: "背";
+  font-size: 9px;
+}
+
+.lesson-module-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.lesson-module-row {
+  display: grid;
+  grid-template-columns: 1fr 14px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: #fbf9f2;
+  text-align: left;
+}
+
+.lesson-module-row strong,
+.lesson-module-row small {
+  display: block;
+}
+
+.lesson-module-row strong {
+  font-size: 11px;
+}
+
+.lesson-module-row small {
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--ink-faint);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lesson-module-row > svg {
+  width: 14px;
+  color: var(--ink-faint);
+}
+
 
 @media (prefers-reduced-motion: reduce) {
   *,

@@ -5,6 +5,7 @@
   const app = document.getElementById("app");
   const toastEl = document.getElementById("toast");
   const levelsById = new Map(DATA.levels.map((level) => [level.id, level]));
+  const sidePacksById = new Map(DATA.sidePacks.map((pack) => [pack.id, pack]));
   const STAGES = [
     { id: "memorize", title: "饱和背诵", short: "背", description: "只追求熟练，不想感情和动作。" },
     { id: "structure", title: "结构锚定", short: "拆", description: "把背下来的话拆成可复用骨架。" },
@@ -61,10 +62,18 @@
     routeId: "",
     sessions: [],
     levelProgress: {},
+    sideProgress: {},
     dataLoaded: false,
     storageReady: true,
     train: null,
+    sideTrain: null,
     timer: null,
+    voiceRate: 1,
+    userAudioUrl: null,
+    mediaRecorder: null,
+    mediaStream: null,
+    mediaChunks: [],
+    mediaStartedAt: 0,
     toastTimer: null,
   };
 
@@ -77,7 +86,7 @@
 
   function openDB() {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open("huishuohua-local", 4);
+      const request = indexedDB.open("huishuohua-local", 5);
       request.onupgradeneeded = () => {
         const db = request.result;
         if (!db.objectStoreNames.contains("sessions")) {
@@ -86,6 +95,9 @@
         }
         if (!db.objectStoreNames.contains("levelProgress")) {
           db.createObjectStore("levelProgress", { keyPath: "levelId" });
+        }
+        if (!db.objectStoreNames.contains("sideProgress")) {
+          db.createObjectStore("sideProgress", { keyPath: "packId" });
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -119,20 +131,29 @@
     idb("levelProgress", "readonly", (store) => store.getAll()).then((rows) =>
       Object.fromEntries(rows.map((row) => [row.levelId, row])),
     );
+  const putSideProgress = (progress) =>
+    idb("sideProgress", "readwrite", (store) => store.put(progress));
+  const getSideProgressRows = () =>
+    idb("sideProgress", "readonly", (store) => store.getAll()).then((rows) =>
+      Object.fromEntries(rows.map((row) => [row.packId, row])),
+    );
 
   async function refreshData() {
     try {
-      const [sessions, levelProgress] = await Promise.all([
+      const [sessions, levelProgress, sideProgress] = await Promise.all([
         getSessions(),
         getLevelProgressRows(),
+        getSideProgressRows(),
       ]);
       state.sessions = sessions || [];
       state.levelProgress = levelProgress || {};
+      state.sideProgress = sideProgress || {};
       state.storageReady = true;
     } catch (error) {
       console.warn(error);
       state.sessions = [];
       state.levelProgress = {};
+      state.sideProgress = {};
       state.storageReady = false;
     } finally {
       state.dataLoaded = true;
@@ -156,6 +177,85 @@
       updatedAt: null,
       ...(state.levelProgress[levelId] || {}),
     };
+  }
+
+  function getSidePack(id) {
+    return sidePacksById.get(id);
+  }
+
+  function getSideProgress(packId) {
+    return {
+      packId,
+      started: false,
+      completed: false,
+      samples: {},
+      startedAt: null,
+      completedAt: null,
+      updatedAt: null,
+      ...(state.sideProgress[packId] || {}),
+    };
+  }
+
+  function getSampleProgress(packId, sampleId) {
+    return {
+      sampleId,
+      memorizePasses: 0,
+      structurePassed: false,
+      variationPassed: false,
+      transferPassed: false,
+      completed: false,
+      ...(getSideProgress(packId).samples?.[sampleId] || {}),
+    };
+  }
+
+  function sidePackUnlocked(pack) {
+    if (!pack.unlockAfterLevel) return true;
+    return getProgress(DATA.levels[pack.unlockAfterLevel - 1].id).completed;
+  }
+
+  function activeSidePack() {
+    const active = Object.values(state.sideProgress).find((progress) => progress.started && !progress.completed);
+    return active ? getSidePack(active.packId) : null;
+  }
+
+  function currentSideSample(pack) {
+    return pack.samples.find((sample) => !getSampleProgress(pack.id, sample.id).completed) || null;
+  }
+
+  function sideSampleStage(pack, sample) {
+    const progress = getSampleProgress(pack.id, sample.id);
+    if (progress.memorizePasses < 3) return "memorize";
+    if (!progress.structurePassed) return "structure";
+    if (!progress.variationPassed) return "variation";
+    if (!progress.transferPassed) return "transfer";
+    return "complete";
+  }
+
+  async function saveSideSample(packId, sampleId, patch) {
+    const packProgress = getSideProgress(packId);
+    const previous = getSampleProgress(packId, sampleId);
+    const samples = {
+      ...packProgress.samples,
+      [sampleId]: {
+        ...previous,
+        ...patch,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+    const completed = getSidePack(packId).samples.every((sample) => samples[sample.id]?.completed);
+    const next = {
+      ...packProgress,
+      packId,
+      started: true,
+      completed,
+      completedAt: completed ? new Date().toISOString() : null,
+      samples,
+      startedAt: packProgress.startedAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await putSideProgress(next);
+    state.sideProgress[packId] = next;
+    return next;
   }
 
   function currentStage(level) {
@@ -215,7 +315,7 @@
 
   function topbar() {
     return `<header class="topbar">
-      <div class="brand"><span class="brand-mark">${icon("logo")}</span><span class="brand-name">会说话 <small class="version-tag">V3</small></span></div>
+      <div class="brand"><span class="brand-mark">${icon("logo")}</span><span class="brand-name">会说话 <small class="version-tag">V3.1</small></span></div>
       <div class="date-label">${formatDate()}</div>
     </header>`;
   }
@@ -285,6 +385,7 @@
     const stage = currentStage(level);
     const stageData = STAGES[stageIndex(stage)];
     const progress = getProgress(level.id);
+    const activeSide = activeSidePack();
     return `<div class="page">
       ${topbar()}
       <section class="v3-today-hero">
@@ -298,6 +399,13 @@
         <div class="v3-focus-head"><span>今天的唯一动作</span><small>${esc(stageData.description)}</small></div>
         <h2>${esc(stageData.title)}</h2>
         ${stagePath(level)}
+      </section>
+      <section class="v3-side-entry">
+        <button data-action="open-side-packs">
+          <span class="v3-side-icon">${icon("cup")}</span>
+          <span><strong>${activeSide ? `继续${esc(activeSide.title)}` : "支线补丁包"}</strong><small>${activeSide ? "支线进行中，主线仍可独立推进" : "敬酒 6 场景 · 致辞 5 场景"}</small></span>
+          ${icon("chevron")}
+        </button>
       </section>
       <div class="v3-meta-line">
         <span>总进度 ${completedLevels()} / 7</span>
@@ -346,9 +454,519 @@
     </div>`;
   }
 
+  function renderSidePacks() {
+    const active = activeSidePack();
+    return `<div class="page">
+      ${backbar("支线补丁包")}
+      <header class="page-heading fade-in">
+        <div class="eyebrow">独立支线</div>
+        <h1>短场景，也要<br>练成自己的。</h1>
+        <p>支线不占主线七关编号。一次只能进行一个支线包，练完再回主线。</p>
+      </header>
+      <div class="v3-side-pack-list">
+        ${DATA.sidePacks
+          .map((pack) => {
+            const progress = getSideProgress(pack.id);
+            const unlocked = sidePackUnlocked(pack);
+            const blockedByActive = active && active.id !== pack.id && !progress.completed;
+            const current = currentSideSample(pack);
+            const completedCount = pack.samples.filter((sample) => getSampleProgress(pack.id, sample.id).completed).length;
+            return `<div class="v3-side-pack-card ${unlocked ? "" : "locked"}">
+              <div class="v3-side-pack-head"><span class="v3-side-icon">${icon(pack.id === "toast" ? "cup" : "book")}</span><span>${esc(pack.kicker)}</span></div>
+              <h2>${esc(pack.title)}</h2>
+              <p>${esc(pack.description)}</p>
+              <div class="v3-side-progress"><span><i style="width:${Math.round((completedCount / pack.samples.length) * 100)}%"></i></span><small>${completedCount} / ${pack.samples.length}</small></div>
+              ${
+                !unlocked
+                  ? `<div class="v3-side-lock">${icon("lock")} 主线第 1 关通关后开放</div>`
+                  : progress.completed
+                    ? `<div class="v3-side-done">${icon("check")} 已完成</div>`
+                    : blockedByActive
+                      ? `<div class="v3-side-lock">${icon("lock")} 先完成${esc(active.title)}</div>`
+                      : `<button class="primary-button block" data-action="open-side-pack" data-id="${pack.id}">${progress.started ? `继续 ${esc(current?.title || "")}` : `开始 ${esc(pack.title)}`} ${icon("chevron")}</button>`
+              }
+            </div>`;
+          })
+          .join("")}
+      </div>
+      <p class="v3-principle">支线内部同样逐样本解锁。当前样本未击穿，不进入下一个。</p>
+    </div>`;
+  }
+
+  function renderSidePack(pack) {
+    if (!pack) return renderSidePacks();
+    const progress = getSideProgress(pack.id);
+    const current = currentSideSample(pack);
+    const active = activeSidePack();
+    const blockedByActive = active && active.id !== pack.id && !progress.completed;
+    return `<div class="page">
+      ${backbar(pack.title)}
+      <section class="v3-side-detail">
+        <div class="eyebrow">${esc(pack.kicker)}</div>
+        <h1>${esc(pack.title)}</h1>
+        <p>${esc(pack.description)}</p>
+        <blockquote>${esc(pack.structureName)}</blockquote>
+      </section>
+      <div class="v3-side-sample-list">
+        ${pack.samples
+          .map((sample) => {
+            const sampleProgress = getSampleProgress(pack.id, sample.id);
+            const isCurrent = current?.id === sample.id;
+            const stateLabel = sampleProgress.completed ? "已通关" : isCurrent ? sideSampleStage(pack, sample) : "未解锁";
+            return `<div class="v3-side-sample ${sampleProgress.completed ? "done" : ""} ${isCurrent ? "current" : ""} ${!sampleProgress.completed && !isCurrent ? "locked" : ""}">
+              <span class="v3-side-sample-index">${sampleProgress.completed ? icon("check") : pack.samples.findIndex((item) => item.id === sample.id) + 1}</span>
+              <span><strong>${esc(sample.title)}</strong><small>${sampleProgress.completed ? "已击穿" : isCurrent ? STAGES[stageIndex(stateLabel)]?.title || "进行中" : "完成上一组后解锁"}</small></span>
+              ${
+                isCurrent && !blockedByActive
+                  ? `<button class="v3-row-action" data-action="start-side-sample" data-pack="${pack.id}" data-id="${sample.id}">${stateLabel === "memorize" ? "开始" : "继续"} ${icon("chevron")}</button>`
+                  : !sampleProgress.completed
+                    ? `<span class="v3-lock">${icon("lock")}</span>`
+                    : ""
+              }
+            </div>`;
+          })
+          .join("")}
+      </div>
+      ${progress.completed ? `<div class="notice">${icon("check")}<span>${esc(pack.title)}已完成。请回主线继续七关训练。</span></div>` : ""}
+      ${blockedByActive ? `<div class="notice danger">${icon("info")}<span>当前正在进行${esc(active.title)}，请先完成后再开启其他支线包。</span></div>` : ""}
+    </div>`;
+  }
+
+  function createSideTrain(pack, sample, stage) {
+    return {
+      packId: pack.id,
+      sampleId: sample.id,
+      stage,
+      view: "full",
+      sentenceIndex: 0,
+      reciteStarted: false,
+      reciteFinished: false,
+      elapsed: 0,
+      countdown: 0,
+      structureSelection: [],
+      structureCorrect: false,
+      variationValues: {},
+      variationOutline: "",
+      variationError: "",
+    };
+  }
+
+  function startSideSample(packId, sampleId) {
+    const pack = getSidePack(packId);
+    const sample = pack?.samples.find((item) => item.id === sampleId);
+    if (!pack || !sample || !sidePackUnlocked(pack)) {
+      showToast("这个支线包还没有解锁");
+      return;
+    }
+    const active = activeSidePack();
+    if (active && active.id !== pack.id) {
+      showToast(`请先完成${active.title}`);
+      return;
+    }
+    const current = currentSideSample(pack);
+    if (current?.id !== sample.id) {
+      showToast("请按顺序完成当前样本");
+      return;
+    }
+    const stage = sideSampleStage(pack, sample);
+    state.sideTrain = createSideTrain(pack, sample, stage);
+    saveSideSample(pack.id, sample.id, {}).finally(() => {
+      navigate(`side-train/${pack.id}/${sample.id}/${stage}`);
+    });
+  }
+
+  function sideStagePassed(pack, sample, stage) {
+    const progress = getSampleProgress(pack.id, sample.id);
+    if (stage === "memorize") return progress.memorizePasses >= 3;
+    if (stage === "structure") return progress.structurePassed;
+    if (stage === "variation") return progress.variationPassed;
+    if (stage === "transfer") return progress.completed;
+    return false;
+  }
+
+  function ensureSideTrainFromRoute() {
+    if (state.sideTrain) return true;
+    const [packId, sampleId, requestedStage] = state.routeId.split("/");
+    const pack = getSidePack(packId);
+    const sample = pack?.samples.find((item) => item.id === sampleId);
+    if (!pack || !sample || !sidePackUnlocked(pack)) {
+      navigate("sidepacks");
+      return false;
+    }
+    const active = activeSidePack();
+    if (active && active.id !== pack.id) {
+      showToast(`请先完成${active.title}`);
+      navigate("sidepacks");
+      return false;
+    }
+    const current = currentSideSample(pack);
+    if (current?.id !== sample.id) {
+      navigate(`sidepack/${pack.id}`);
+      return false;
+    }
+    const nextStage = sideSampleStage(pack, sample);
+    const stage =
+      requestedStage && (requestedStage === nextStage || sideStagePassed(pack, sample, requestedStage))
+        ? requestedStage
+        : nextStage;
+    state.sideTrain = createSideTrain(pack, sample, stage);
+    if (stage !== requestedStage) {
+      history.replaceState(null, "", `#/side-train/${pack.id}/${sample.id}/${stage}`);
+      state.routeId = `${pack.id}/${sample.id}/${stage}`;
+    }
+    return true;
+  }
+
+  async function recordSidePass(pack, sample, stage) {
+    const exists = state.sessions.some(
+      (session) =>
+        session.schemaVersion === 4 &&
+        session.packId === pack.id &&
+        session.sampleId === sample.id &&
+        session.stage === stage,
+    );
+    if (exists) return;
+    const session = {
+      id: uid(),
+      schemaVersion: 4,
+      packId: pack.id,
+      sampleId: sample.id,
+      title: `${pack.title} · ${sample.title}`,
+      stage,
+      stageLabel: STAGES.find((item) => item.id === stage)?.title || stage,
+      status: "过关",
+      createdAt: new Date().toISOString(),
+      durationSec: 0,
+      attempts: [],
+    };
+    await putSession(session);
+    state.sessions.unshift(session);
+  }
+
+  function sideHeader(pack, sample, stage) {
+    const index = stageIndex(stage);
+    return `<header class="backbar practice-header">
+      <button class="icon-button" data-action="back" aria-label="返回">${icon("arrowLeft")}</button>
+      <div class="backbar-title">${esc(pack.title)} · ${STAGES[index].title}</div>
+      <span aria-hidden="true"></span>
+    </header>
+    <div class="v3-stage-progress">${STAGES.map((_, i) => `<span class="${i <= index ? "active" : ""}"></span>`).join("")}</div>
+    <div class="v3-stage-subtitle">${esc(sample.title)} · ${pack.id === "toast" ? "30～45 秒" : "2～3 分钟"}</div>`;
+  }
+
+  function sideStageComplete(pack, sample, stage, title, copy) {
+    const current = currentSideSample(pack);
+    const nextStage = current?.id === sample.id ? sideSampleStage(pack, sample) : null;
+    const nextSample = current?.id !== sample.id ? current : null;
+    return `<div class="page page-practice">
+      ${sideHeader(pack, sample, stage)}
+      <main class="practice-shell">
+        <section class="v3-stage-complete">
+          <span class="completion-mark">${icon("check")}</span>
+          <div class="eyebrow">${STAGES[stageIndex(stage)].title}已过关</div>
+          <h1>${esc(title)}</h1>
+          <p>${esc(copy)}</p>
+          ${
+            nextStage
+              ? `<button class="primary-button block" data-action="start-side-sample" data-pack="${pack.id}" data-id="${sample.id}">继续${STAGES[stageIndex(nextStage)].title} ${icon("chevron")}</button>`
+              : nextSample
+                ? `<button class="primary-button block" data-action="start-side-sample" data-pack="${pack.id}" data-id="${nextSample.id}">进入下一组：${esc(nextSample.title)} ${icon("chevron")}</button>`
+                : `<button class="primary-button block" data-action="open-side-pack" data-id="${pack.id}">查看${esc(pack.title)}通关 ${icon("check")}</button>`
+          }
+        </section>
+      </main>
+    </div>`;
+  }
+
+  function renderSideMemorize(pack, sample) {
+    const progress = getSampleProgress(pack.id, sample.id);
+    const drill = state.sideTrain;
+    if (progress.memorizePasses >= 3) {
+      return sideStageComplete(
+        pack,
+        sample,
+        "memorize",
+        "这段已经背熟。",
+        "下一步只拆出固定骨架，不评价语气和表演。",
+      );
+    }
+    const currentText =
+      drill.view === "sentence" ? sample.text[drill.sentenceIndex] : sample.text;
+    return `<div class="page page-practice">
+      ${sideHeader(pack, sample, "memorize")}
+      <main class="practice-shell">
+        <section class="practice-center fade-in">
+          <div class="practice-copy">
+            <div class="eyebrow">第 1 步 · 饱和背诵</div>
+            <h1>先把这一组，<br>背到不用想。</h1>
+            <p>连续三次脱稿无卡顿，才拆结构。卡一次，连续次数清零。</p>
+          </div>
+          <div class="v3-pass-counter">
+            ${[0, 1, 2].map((index) => `<span class="${index < progress.memorizePasses ? "done" : ""}">${index < progress.memorizePasses ? icon("check") : index + 1}</span>`).join("")}
+            <small>连续达标 ${progress.memorizePasses} / 3</small>
+          </div>
+          <section class="v3-classic-card">
+            <div class="v3-card-tools">
+              <button class="${drill.view === "sentence" ? "active" : ""}" data-action="side-view" data-view="sentence">逐句跟读</button>
+              <button class="${drill.view === "full" ? "active" : ""}" data-action="side-view" data-view="full">全文跟读</button>
+              <button class="speak-button" data-action="speak-side">${icon("volume")} 听示范</button>
+            </div>
+            ${
+              drill.view === "sentence"
+                ? `<div class="v3-sentence-focus">${esc(sample.text[drill.sentenceIndex])}</div>
+                   <div class="v3-sentence-nav"><button data-action="side-sentence-prev" ${drill.sentenceIndex === 0 ? "disabled" : ""}>上一句</button><span>${drill.sentenceIndex + 1} / ${sample.text.length}</span><button data-action="side-sentence-next" ${drill.sentenceIndex === sample.text.length - 1 ? "disabled" : ""}>下一句</button></div>`
+                : `<div class="v3-classic-text">${sample.text.map((paragraph) => `<p>${esc(paragraph)}</p>`).join("")}</div>`
+            }
+          </section>
+          ${voiceRateControls()}
+          ${userRecordingControls()}
+          ${
+            !drill.reciteStarted
+              ? `<button class="primary-button block" data-action="side-start-recite">开始脱稿背诵 ${icon("mic")}</button>
+                 <p class="v3-small-note">开始后全文隐藏。只判断熟练，不评价情绪和语气。</p>`
+              : !drill.reciteFinished
+                ? `<section class="v3-recite-card"><div class="recording-status live">脱稿中</div><div class="recording-clock" id="recite-clock">${formatClock(drill.elapsed)}</div><p>不要看原文，背完后再结束计时。</p><button class="primary-button block" data-action="side-finish-recite">我背完了</button></section>`
+                : `<section class="v3-recite-card"><div class="eyebrow">这一遍结束</div><div class="v3-classic-text compact">${sample.text.map((paragraph) => `<p>${esc(paragraph)}</p>`).join("")}</div><p>对照原文判断：有没有明显卡顿、错漏，或者需要停下来想很久？</p><div class="button-row"><button class="secondary-button" data-action="side-stutter">有卡顿，重新开始</button><button class="primary-button" data-action="side-clean-pass">无卡顿，完成一遍</button></div></section>`
+          }
+        </section>
+      </main>
+    </div>`;
+  }
+
+  function renderSideStructure(pack, sample) {
+    const progress = getSampleProgress(pack.id, sample.id);
+    const drill = state.sideTrain;
+    if (progress.structurePassed) {
+      return sideStageComplete(
+        pack,
+        sample,
+        "structure",
+        "骨架已经拆出来。",
+        `${pack.structureName}。下一步换掉具体内容，只保留这个顺序。`,
+      );
+    }
+    const items = pack.segments.map((label, index) => ({ label, index }));
+    const shift = items.length > 1 ? 1 : 0;
+    const options = [...items.slice(shift), ...items.slice(0, shift)];
+    const selected = drill.structureSelection;
+    const correct = selected.length === items.length && selected.every((value, index) => value === index);
+    return `<div class="page page-practice">
+      ${sideHeader(pack, sample, "structure")}
+      <main class="practice-shell">
+        <section class="practice-center fade-in">
+          <div class="practice-copy">
+            <div class="eyebrow">第 2 步 · 拆出骨架</div>
+            <h1>内容可以忘，<br>顺序不能乱。</h1>
+            <p>按顺序拼出这一段的固定模块，再脱口说出每一块的作用。</p>
+          </div>
+          <section class="v3-classic-card"><div class="v3-classic-text compact">${sample.text.map((paragraph) => `<p>${esc(paragraph)}</p>`).join("")}</div></section>
+          <section class="v3-structure-builder">
+            <div class="v3-builder-head"><strong>拼出正确顺序</strong><button class="text-button" data-action="side-reset-structure">重新排序</button></div>
+            <div class="v3-structure-options">${options.map((item) => `<button class="${selected.includes(item.index) ? "selected" : ""}" data-action="side-pick-structure" data-index="${item.index}" ${selected.includes(item.index) ? "disabled" : ""}>${esc(item.label)}</button>`).join("")}</div>
+            <div class="v3-structure-slots">${pack.segments.map((_, index) => `<div><span>${index + 1}</span><strong>${selected[index] != null ? esc(pack.segments[selected[index]]) : "待选择"}</strong></div>`).join("")}</div>
+            ${selected.length === items.length ? `<div class="notice ${correct ? "" : "danger"}"><span>${correct ? "顺序正确。现在脱口说出每一块负责什么。" : "顺序不对，只重练本步。"}</span></div>` : ""}
+          </section>
+          ${correct ? `<button class="primary-button block" data-action="side-pass-structure">我已经能说出每块作用 ${icon("check")}</button>` : ""}
+        </section>
+      </main>
+    </div>`;
+  }
+
+  function renderSideVariation(pack, sample) {
+    const progress = getSampleProgress(pack.id, sample.id);
+    const drill = state.sideTrain;
+    if (progress.variationPassed) {
+      return sideStageComplete(
+        pack,
+        sample,
+        "variation",
+        "骨架已经脱离原内容。",
+        "下一步进入固定考场，用新对象或新场景完成最后一次迁移。",
+      );
+    }
+    const duration = pack.id === "toast" ? 45 : 180;
+    return `<div class="page page-practice">
+      ${sideHeader(pack, sample, "variation")}
+      <main class="practice-shell">
+        <section class="practice-center fade-in">
+          <div class="practice-copy">
+            <div class="eyebrow">第 3 步 · 换内容保骨架</div>
+            <h1>换掉内容，<br>不换顺序。</h1>
+            <p>金句固定为：“${esc(sample.quote)}”。更换对象和三拍内容后，按原骨架完整说一遍。</p>
+          </div>
+          ${
+            !drill.variationOutline
+              ? `<form id="side-variation-form" class="v3-form">
+                  ${pack.variation.fields
+                    .map((field) => `<label><span>${esc(field)}</span><input name="${esc(field)}" value="${esc(drill.variationValues[field] || "")}" placeholder="换成一个真实内容"></label>`)
+                    .join("")}
+                  ${drill.variationError ? `<p class="v3-error">${esc(drill.variationError)}</p>` : ""}
+                  <button class="primary-button block" type="submit">生成替换提纲</button>
+                </form>`
+              : `<section class="v3-outline-card"><div class="content-label">你的新提纲</div><p>${esc(drill.variationOutline)}</p><button class="text-button" data-action="side-reset-variation">重新填写</button></section>
+                 <section class="v3-timer-card"><div class="stage-timer" id="side-variation-clock">${formatClock(duration)}</div><button class="secondary-button block" data-action="side-countdown" data-seconds="${duration}" data-clock="side-variation-clock">开始计时表达</button></section>
+                 <div class="notice neutral"><span>只说固定骨架，不临场加新的结构。</span></div>
+                 <button class="primary-button block" data-action="side-pass-variation">我按骨架说完了 ${icon("check")}</button>`
+          }
+        </section>
+      </main>
+    </div>`;
+  }
+
+  function renderSideTransfer(pack, sample) {
+    const progress = getSampleProgress(pack.id, sample.id);
+    if (progress.completed) {
+      return sideStageComplete(
+        pack,
+        sample,
+        "transfer",
+        "这组场景已经通关。",
+        "按固定流程进入下一组，不增加额外样本。",
+      );
+    }
+    return `<div class="page page-practice">
+      ${sideHeader(pack, sample, "transfer")}
+      <main class="practice-shell">
+        <section class="practice-center fade-in">
+          <div class="practice-copy">
+            <div class="eyebrow">第 4 步 · 场景套用通关</div>
+            <h1>换对象，<br>骨架还在不在？</h1>
+            <p>不看原稿，按固定骨架完成下面的真实场景。</p>
+          </div>
+          <section class="v3-transfer-card">
+            <div class="content-label">通关命题</div>
+            <h2>${esc(sample.transfer.title)}</h2>
+            <p>${esc(sample.transfer.scene)}</p>
+            <div class="structure-flow">${pack.segments.map((segment) => `<span class="structure-step">${esc(segment)}</span>`).join("")}</div>
+          </section>
+          <section class="v3-timer-card"><div class="stage-timer" id="side-transfer-clock">${formatClock(pack.id === "toast" ? 45 : 180)}</div><button class="secondary-button block" data-action="side-countdown" data-seconds="${pack.id === "toast" ? 45 : 180}" data-clock="side-transfer-clock">开始脱稿表达</button></section>
+          <form id="side-transfer-form" class="v3-check-form">
+            <h3>只检查结构</h3>
+            ${sample.transfer.checks.map((check) => `<label><input type="checkbox" name="side-transfer-check" value="${esc(check)}"><span>${esc(check)}</span></label>`).join("")}
+            <p class="v3-error" id="side-transfer-error"></p>
+            <button class="primary-button block" type="submit">这一组通过 ${icon("chevron")}</button>
+          </form>
+        </section>
+      </main>
+    </div>`;
+  }
+
+  function renderSideTraining() {
+    if (!ensureSideTrainFromRoute()) return "";
+    const pack = getSidePack(state.sideTrain.packId);
+    const sample = pack?.samples.find((item) => item.id === state.sideTrain.sampleId);
+    if (!pack || !sample) {
+      navigate("sidepacks");
+      return "";
+    }
+    switch (state.sideTrain.stage) {
+      case "memorize":
+        return renderSideMemorize(pack, sample);
+      case "structure":
+        return renderSideStructure(pack, sample);
+      case "variation":
+        return renderSideVariation(pack, sample);
+      case "transfer":
+        return renderSideTransfer(pack, sample);
+      default:
+        return renderSidePack(pack);
+    }
+  }
+
+  async function handleSideCleanPass() {
+    const pack = getSidePack(state.sideTrain.packId);
+    const sample = pack.samples.find((item) => item.id === state.sideTrain.sampleId);
+    const progress = getSampleProgress(pack.id, sample.id);
+    const passes = Math.min(3, progress.memorizePasses + 1);
+    await saveSideSample(pack.id, sample.id, { memorizePasses: passes });
+    if (passes >= 3) await recordSidePass(pack, sample, "memorize");
+    state.sideTrain.reciteStarted = false;
+    state.sideTrain.reciteFinished = false;
+    stopTimer();
+    render();
+  }
+
+  async function handleSideStutter() {
+    const pack = getSidePack(state.sideTrain.packId);
+    const sample = pack.samples.find((item) => item.id === state.sideTrain.sampleId);
+    await saveSideSample(pack.id, sample.id, { memorizePasses: 0 });
+    state.sideTrain.reciteStarted = false;
+    state.sideTrain.reciteFinished = false;
+    stopTimer();
+    showToast("连续次数已清零，重新开始第 1 遍");
+    render();
+  }
+
+  async function passSideStructure() {
+    const pack = getSidePack(state.sideTrain.packId);
+    const sample = pack.samples.find((item) => item.id === state.sideTrain.sampleId);
+    await saveSideSample(pack.id, sample.id, { structurePassed: true });
+    await recordSidePass(pack, sample, "structure");
+    render();
+  }
+
+  function fillSideVariation(pack, sample, values, template) {
+    return template.replace(/\{([^}]+)\}/g, (_, key) => {
+      if (key === "引用") return sample.quote;
+      return values[key] || `【${key}】`;
+    });
+  }
+
+  function submitSideVariation(event) {
+    event.preventDefault();
+    const pack = getSidePack(state.sideTrain.packId);
+    const sample = pack.samples.find((item) => item.id === state.sideTrain.sampleId);
+    const form = new FormData(event.target);
+    const values = Object.fromEntries(pack.variation.fields.map((field) => [field, String(form.get(field) || "").trim()]));
+    if (pack.variation.fields.some((field) => !values[field])) {
+      state.sideTrain.variationValues = values;
+      state.sideTrain.variationError = "每一项都要替换成真实内容，不能留空。";
+      render();
+      return;
+    }
+    state.sideTrain.variationValues = values;
+    state.sideTrain.variationOutline = fillSideVariation(
+      pack,
+      sample,
+      values,
+      pack.variation.template,
+    );
+    state.sideTrain.variationError = "";
+    render();
+  }
+
+  async function passSideVariation() {
+    const pack = getSidePack(state.sideTrain.packId);
+    const sample = pack.samples.find((item) => item.id === state.sideTrain.sampleId);
+    await saveSideSample(pack.id, sample.id, {
+      variationPassed: true,
+      variationOutline: state.sideTrain.variationOutline,
+    });
+    await recordSidePass(pack, sample, "variation");
+    render();
+  }
+
+  async function submitSideTransfer(event) {
+    event.preventDefault();
+    const pack = getSidePack(state.sideTrain.packId);
+    const sample = pack.samples.find((item) => item.id === state.sideTrain.sampleId);
+    const checks = event.target.querySelectorAll('input[name="side-transfer-check"]:checked').length;
+    if (checks < sample.transfer.checks.length) {
+      const error = document.getElementById("side-transfer-error");
+      if (error) error.textContent = "结构检查全部完成，才能通过这一组。";
+      return;
+    }
+    await saveSideSample(pack.id, sample.id, {
+      transferPassed: true,
+      completed: true,
+    });
+    await recordSidePass(pack, sample, "transfer");
+    render();
+  }
+
   function renderRecords() {
     const current = currentLevel();
-    const totalStages = Object.values(state.levelProgress).reduce((sum, progress) => {
+    const mainStages = Object.values(state.levelProgress).reduce((sum, progress) => {
       return (
         sum +
         (progress.memorizePasses >= 3 ? 1 : 0) +
@@ -357,6 +975,26 @@
         (progress.transferPassed?.filter(Boolean).length >= 3 ? 1 : 0)
       );
     }, 0);
+    const sideStages = Object.values(state.sideProgress).reduce((sum, packProgress) => {
+      return (
+        sum +
+        Object.values(packProgress.samples || {}).reduce((sampleSum, sample) => {
+          return (
+            sampleSum +
+            (sample.memorizePasses >= 3 ? 1 : 0) +
+            (sample.structurePassed ? 1 : 0) +
+            (sample.variationPassed ? 1 : 0) +
+            (sample.transferPassed ? 1 : 0)
+          );
+        }, 0)
+      );
+    }, 0);
+    const completedSideSamples = DATA.sidePacks.reduce(
+      (sum, pack) =>
+        sum +
+        pack.samples.filter((sample) => getSampleProgress(pack.id, sample.id).completed).length,
+      0,
+    );
     return `<div class="page">
       ${topbar()}
       <header class="page-heading fade-in">
@@ -366,9 +1004,10 @@
       </header>
       <div class="v3-stat-line">
         <div><strong>${completedLevels()}</strong><span>通关关卡</span></div>
-        <div><strong>${totalStages}</strong><span>通过步骤</span></div>
+        <div><strong>${completedSideSamples}/11</strong><span>支线样本</span></div>
         <div><strong>${state.sessions.length}</strong><span>过关记录</span></div>
       </div>
+      <p class="v3-principle">主线通过 ${mainStages} 个步骤，支线通过 ${sideStages} 个步骤。</p>
       <section class="section">
         <div class="section-head"><div><h2>过关记录</h2><p>记录不评价发音、气场或知识掌握。</p></div></div>
         ${
@@ -404,44 +1043,144 @@
     state.timer = null;
   }
 
-  function speak(text) {
+  function preferredVoice() {
+    const voices = window.speechSynthesis?.getVoices?.() || [];
+    const chinese = voices.filter((voice) => /^zh|Chinese|中文/i.test(`${voice.lang} ${voice.name}`));
+    const maleHints = /Yunxi|Yunyang|Kangkang|Liang|Male|男|Sinji/i;
+    return chinese.find((voice) => maleHints.test(voice.name)) || chinese[0] || null;
+  }
+
+  function speak(text, rate = state.voiceRate) {
     if (!("speechSynthesis" in window)) {
       showToast("当前浏览器不支持语音示范");
       return;
     }
     const utterance = new SpeechSynthesisUtterance(String(text).replace(/\n+/g, "，"));
     utterance.lang = "zh-CN";
-    utterance.rate = 0.86;
+    utterance.rate = rate;
+    const voice = preferredVoice();
+    if (voice) utterance.voice = voice;
     speechSynthesis.cancel();
     speechSynthesis.speak(utterance);
   }
 
-  function startCountUp(clockId) {
+  function speakParagraphs(paragraphs, rate = state.voiceRate) {
+    if (!("speechSynthesis" in window)) {
+      showToast("当前浏览器不支持语音示范");
+      return;
+    }
+    speechSynthesis.cancel();
+    const voice = preferredVoice();
+    const blocks = Array.isArray(paragraphs) ? paragraphs : [paragraphs];
+    const next = (index) => {
+      if (index >= blocks.length) return;
+      const utterance = new SpeechSynthesisUtterance(blocks[index]);
+      utterance.lang = "zh-CN";
+      utterance.rate = rate;
+      if (voice) utterance.voice = voice;
+      utterance.onend = () => setTimeout(() => next(index + 1), 550);
+      speechSynthesis.speak(utterance);
+    };
+    next(0);
+  }
+
+  function voiceRateControls() {
+    return `<div class="v3-voice-rate">
+      <span>示范语速 · 中文男声优先</span>
+      ${[0.8, 1, 1.5]
+        .map(
+          (rate) => `<button class="${state.voiceRate === rate ? "active" : ""}" data-action="voice-rate" data-rate="${rate}">${rate.toFixed(1)}x</button>`,
+        )
+        .join("")}
+    </div>`;
+  }
+
+  function clearUserAudio() {
+    if (state.userAudioUrl) URL.revokeObjectURL(state.userAudioUrl);
+    state.userAudioUrl = null;
+  }
+
+  function recordingSupported() {
+    return Boolean(window.isSecureContext && navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+  }
+
+  async function startUserRecording() {
+    if (!recordingSupported()) {
+      showToast("当前微信环境无法录音，可继续使用语音示范跟读");
+      return;
+    }
+    try {
+      clearUserAudio();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      const recorder = new MediaRecorder(stream);
+      state.mediaStream = stream;
+      state.mediaRecorder = recorder;
+      state.mediaChunks = [];
+      state.mediaStartedAt = Date.now();
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size) state.mediaChunks.push(event.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(state.mediaChunks, { type: recorder.mimeType || "audio/mp4" });
+        clearUserAudio();
+        state.userAudioUrl = URL.createObjectURL(blob);
+        state.mediaStream?.getTracks().forEach((track) => track.stop());
+        state.mediaStream = null;
+        state.mediaRecorder = null;
+        render();
+      };
+      recorder.start(500);
+      render();
+    } catch (error) {
+      console.warn(error);
+      showToast("没有获得麦克风权限，可继续使用系统示范");
+    }
+  }
+
+  function stopUserRecording() {
+    if (state.mediaRecorder?.state === "recording") state.mediaRecorder.stop();
+  }
+
+  function userRecordingControls() {
+    return `<section class="v3-follow-record">
+      <div class="v3-follow-head"><strong>跟读自检</strong><small>系统示范用于定节奏，录音只用于自己对比，不做评分。</small></div>
+      ${
+        state.mediaRecorder?.state === "recording"
+          ? `<button class="record-button stop" data-action="stop-user-recording" aria-label="停止录音"></button><p>录音中，点击停止</p>`
+          : `<button class="secondary-button block" data-action="start-user-recording">${icon("mic")} 录一遍跟读</button>
+             ${state.userAudioUrl ? `<audio controls playsinline src="${state.userAudioUrl}"></audio>` : ""}`
+      }
+    </section>`;
+  }
+
+  function startCountUp(clockId, target = state.train) {
     stopTimer();
-    state.train.elapsed = 0;
+    target.elapsed = 0;
     const update = () => {
       const clock = document.getElementById(clockId);
-      if (clock) clock.textContent = formatClock(state.train.elapsed);
+      if (clock) clock.textContent = formatClock(target.elapsed);
     };
     update();
     state.timer = setInterval(() => {
-      state.train.elapsed += 1;
+      target.elapsed += 1;
       update();
     }, 1000);
   }
 
-  function startCountdown(seconds, clockId) {
+  function startCountdown(seconds, clockId, target = state.train) {
     stopTimer();
-    state.train.countdown = seconds;
+    target.countdown = seconds;
     const update = () => {
       const clock = document.getElementById(clockId);
-      if (clock) clock.textContent = formatClock(state.train.countdown);
+      if (clock) clock.textContent = formatClock(target.countdown);
     };
     update();
     state.timer = setInterval(() => {
-      state.train.countdown -= 1;
+      target.countdown -= 1;
       update();
-      if (state.train.countdown <= 0) {
+      if (target.countdown <= 0) {
         stopTimer();
         showToast("时间到，可以继续完成");
       }
@@ -621,6 +1360,8 @@
                 : `<div class="v3-classic-text">${level.text.map((paragraph) => `<p>${esc(paragraph)}</p>`).join("")}</div>`
             }
           </section>
+          ${voiceRateControls()}
+          ${userRecordingControls()}
           ${
             !drill.reciteStarted
               ? `<button class="primary-button block" data-action="start-recite">开始脱稿背诵 ${icon("mic")}</button>
@@ -996,6 +1737,7 @@
         exportedAt: new Date().toISOString(),
         sessions,
         levelProgress: Object.values(state.levelProgress),
+        sideProgress: Object.values(state.sideProgress),
       };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -1032,6 +1774,9 @@
       for (const progress of payload.levelProgress || []) {
         if (progress?.levelId && getLevel(progress.levelId)) await putLevelProgress(progress);
       }
+      for (const progress of payload.sideProgress || []) {
+        if (progress?.packId && getSidePack(progress.packId)) await putSideProgress(progress);
+      }
       await refreshData();
       render();
       showToast(count ? `已导入 ${count} 条记录` : "没有新的记录");
@@ -1047,9 +1792,11 @@
       await Promise.all([
         idb("sessions", "readwrite", (store) => store.clear()),
         idb("levelProgress", "readwrite", (store) => store.clear()),
+        idb("sideProgress", "readwrite", (store) => store.clear()),
       ]);
       state.sessions = [];
       state.levelProgress = {};
+      state.sideProgress = {};
       render();
       showToast("本机数据已清空");
     } catch (error) {
@@ -1074,6 +1821,17 @@
       case "records":
         state.train = null;
         html = renderRecords();
+        break;
+      case "sidepacks":
+        state.train = null;
+        html = renderSidePacks();
+        break;
+      case "sidepack":
+        state.train = null;
+        html = renderSidePack(getSidePack(state.routeId));
+        break;
+      case "side-train":
+        html = renderSideTraining();
         break;
       case "train":
         html = renderTraining();
@@ -1105,6 +1863,15 @@
       case "start-level":
         startLevel(id);
         break;
+      case "open-side-packs":
+        navigate("sidepacks");
+        break;
+      case "open-side-pack":
+        navigate(`sidepack/${id}`);
+        break;
+      case "start-side-sample":
+        startSideSample(trigger.dataset.pack, id);
+        break;
       case "open-stage":
         startLevel(id, trigger.dataset.stage);
         break;
@@ -1124,13 +1891,45 @@
       }
       case "speak-memorize": {
         const level = getLevel(state.train.levelId);
-        speak(
-          state.train.view === "sentence"
-            ? level.text[state.train.sentenceIndex]
-            : level.text.join("，"),
-        );
+        if (state.train.view === "sentence") {
+          speak(level.text[state.train.sentenceIndex]);
+        } else {
+          speakParagraphs(level.text);
+        }
         break;
       }
+      case "side-view":
+        state.sideTrain.view = trigger.dataset.view;
+        render();
+        break;
+      case "side-sentence-prev":
+        if (state.sideTrain.sentenceIndex > 0) state.sideTrain.sentenceIndex -= 1;
+        render();
+        break;
+      case "side-sentence-next": {
+        const pack = getSidePack(state.sideTrain.packId);
+        const sample = pack.samples.find((item) => item.id === state.sideTrain.sampleId);
+        if (state.sideTrain.sentenceIndex < sample.text.length - 1) state.sideTrain.sentenceIndex += 1;
+        render();
+        break;
+      }
+      case "speak-side": {
+        const pack = getSidePack(state.sideTrain.packId);
+        const sample = pack.samples.find((item) => item.id === state.sideTrain.sampleId);
+        if (state.sideTrain.view === "sentence") speak(sample.text[state.sideTrain.sentenceIndex]);
+        else speakParagraphs(sample.text);
+        break;
+      }
+      case "voice-rate":
+        state.voiceRate = Number(trigger.dataset.rate);
+        render();
+        break;
+      case "start-user-recording":
+        startUserRecording();
+        break;
+      case "stop-user-recording":
+        stopUserRecording();
+        break;
       case "start-recite":
         state.train.reciteStarted = true;
         state.train.reciteFinished = false;
@@ -1147,6 +1946,23 @@
         break;
       case "stutter-reset":
         handleStutter();
+        break;
+      case "side-start-recite":
+        state.sideTrain.reciteStarted = true;
+        state.sideTrain.reciteFinished = false;
+        render();
+        startCountUp("recite-clock", state.sideTrain);
+        break;
+      case "side-finish-recite":
+        stopTimer();
+        state.sideTrain.reciteFinished = true;
+        render();
+        break;
+      case "side-clean-pass":
+        handleSideCleanPass();
+        break;
+      case "side-stutter":
+        handleSideStutter();
         break;
       case "pick-structure": {
         const index = Number(trigger.dataset.index);
@@ -1168,8 +1984,31 @@
         state.train.structureQuizWrong = false;
         render();
         break;
+      case "side-pick-structure": {
+        const index = Number(trigger.dataset.index);
+        if (!state.sideTrain.structureSelection.includes(index)) {
+          state.sideTrain.structureSelection.push(index);
+          const pack = getSidePack(state.sideTrain.packId);
+          state.sideTrain.structureCorrect =
+            state.sideTrain.structureSelection.length === pack.segments.length &&
+            state.sideTrain.structureSelection.every((value, position) => value === position);
+          render();
+        }
+        break;
+      }
+      case "side-reset-structure":
+        state.sideTrain.structureSelection = [];
+        state.sideTrain.structureCorrect = false;
+        render();
+        break;
+      case "side-pass-structure":
+        passSideStructure();
+        break;
       case "start-countdown":
         startCountdown(Number(trigger.dataset.seconds || 90), trigger.dataset.clock || "variation-clock");
+        break;
+      case "side-countdown":
+        startCountdown(Number(trigger.dataset.seconds || 45), trigger.dataset.clock || "side-variation-clock", state.sideTrain);
         break;
       case "reset-variation":
         state.train.variationOutline = "";
@@ -1177,6 +2016,13 @@
         break;
       case "pass-variation":
         passVariation();
+        break;
+      case "side-reset-variation":
+        state.sideTrain.variationOutline = "";
+        render();
+        break;
+      case "side-pass-variation":
+        passSideVariation();
         break;
       case "finish-all":
         navigate("levels");
@@ -1196,6 +2042,8 @@
     if (event.target.id === "structure-quiz") submitStructureQuiz(event);
     if (event.target.id === "variation-form") submitVariation(event);
     if (event.target.id === "transfer-form") submitTransfer(event);
+    if (event.target.id === "side-variation-form") submitSideVariation(event);
+    if (event.target.id === "side-transfer-form") submitSideTransfer(event);
   });
 
   app.addEventListener("change", (event) => {
@@ -1212,7 +2060,12 @@
 
   window.addEventListener("hashchange", () => {
     stopTimer();
+    if (state.mediaRecorder?.state === "recording") state.mediaRecorder.stop();
+    state.mediaStream?.getTracks().forEach((track) => track.stop());
+    state.mediaStream = null;
+    clearUserAudio();
     if (!location.hash.startsWith("#/train")) state.train = null;
+    if (!location.hash.startsWith("#/side-train")) state.sideTrain = null;
     render();
   });
 

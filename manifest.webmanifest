@@ -1,7 +1,7 @@
 {
   "name": "会说话",
   "short_name": "会说话",
-  "description": "七关经典范文与敬酒、致辞支线包。逐篇背诵、拆结构、换内容、真实迁移，通关后解锁。",
+  "description": "七关经典范文与敬酒、致辞支线，支持私人男声示范本地导入。逐篇击穿，通关后解锁。",
   "lang": "zh-CN",
   "start_url": "./index.html",
   "scope": "./",

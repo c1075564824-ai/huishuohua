@@ -3715,6 +3715,63 @@ audio {
   height: 36px;
 }
 
+.v3-voice-import-tip,
+.v3-voice-active {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  color: var(--ink-soft);
+  background: rgba(255, 253, 247, 0.65);
+  font-size: 9px;
+  text-align: left;
+}
+
+.v3-voice-import-tip svg,
+.v3-voice-active svg {
+  width: 14px;
+  color: var(--green-mid);
+}
+
+.v3-voice-pack-current {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.v3-voice-pack-current > span {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  color: var(--green);
+  background: var(--green-light);
+  place-items: center;
+}
+
+.v3-voice-pack-current svg {
+  width: 18px;
+}
+
+.v3-voice-pack-current strong,
+.v3-voice-pack-current small {
+  display: block;
+}
+
+.v3-voice-pack-current strong {
+  font-size: 12px;
+}
+
+.v3-voice-pack-current small {
+  margin-top: 3px;
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
 
 @media (prefers-reduced-motion: reduce) {
   *,

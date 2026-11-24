@@ -63,6 +63,7 @@
     sessions: [],
     levelProgress: {},
     sideProgress: {},
+    voiceMeta: null,
     dataLoaded: false,
     storageReady: true,
     train: null,
@@ -74,6 +75,7 @@
     mediaStream: null,
     mediaChunks: [],
     mediaStartedAt: 0,
+    voicePlayback: null,
     toastTimer: null,
   };
 
@@ -86,7 +88,7 @@
 
   function openDB() {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open("huishuohua-local", 5);
+      const request = indexedDB.open("huishuohua-local", 6);
       request.onupgradeneeded = () => {
         const db = request.result;
         if (!db.objectStoreNames.contains("sessions")) {
@@ -98,6 +100,12 @@
         }
         if (!db.objectStoreNames.contains("sideProgress")) {
           db.createObjectStore("sideProgress", { keyPath: "packId" });
+        }
+        if (!db.objectStoreNames.contains("voiceMeta")) {
+          db.createObjectStore("voiceMeta", { keyPath: "id" });
+        }
+        if (!db.objectStoreNames.contains("voiceAssets")) {
+          db.createObjectStore("voiceAssets", { keyPath: "key" });
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -140,20 +148,23 @@
 
   async function refreshData() {
     try {
-      const [sessions, levelProgress, sideProgress] = await Promise.all([
+      const [sessions, levelProgress, sideProgress, voiceMeta] = await Promise.all([
         getSessions(),
         getLevelProgressRows(),
         getSideProgressRows(),
+        idb("voiceMeta", "readonly", (store) => store.get("active")),
       ]);
       state.sessions = sessions || [];
       state.levelProgress = levelProgress || {};
       state.sideProgress = sideProgress || {};
+      state.voiceMeta = voiceMeta || null;
       state.storageReady = true;
     } catch (error) {
       console.warn(error);
       state.sessions = [];
       state.levelProgress = {};
       state.sideProgress = {};
+      state.voiceMeta = null;
       state.storageReady = false;
     } finally {
       state.dataLoaded = true;
@@ -315,7 +326,7 @@
 
   function topbar() {
     return `<header class="topbar">
-      <div class="brand"><span class="brand-mark">${icon("logo")}</span><span class="brand-name">会说话 <small class="version-tag">V3.1</small></span></div>
+      <div class="brand"><span class="brand-mark">${icon("logo")}</span><span class="brand-name">会说话 <small class="version-tag">V3.2</small></span></div>
       <div class="date-label">${formatDate()}</div>
     </header>`;
   }
@@ -407,6 +418,11 @@
           ${icon("chevron")}
         </button>
       </section>
+      ${
+        !state.voiceMeta
+          ? `<button class="v3-voice-import-tip" data-action="navigate" data-route="records">${icon("volume")} 导入私人男声声音包，替换机械系统音</button>`
+          : `<div class="v3-voice-active">${icon("volume")} 私人示范音：${esc(state.voiceMeta.name)}</div>`
+      }
       <div class="v3-meta-line">
         <span>总进度 ${completedLevels()} / 7</span>
         <span>本关建议 3～5 天</span>
@@ -1024,6 +1040,18 @@
         }
       </section>
       <section class="section">
+        <div class="section-head"><div><h2>私人示范音</h2><p>音频只导入当前手机，不上传公开网页。</p></div></div>
+        <div class="content-card flat">
+          ${
+            state.voiceMeta
+              ? `<div class="v3-voice-pack-current"><span>${icon("volume")}</span><div><strong>${esc(state.voiceMeta.name)}</strong><small>${state.voiceMeta.fileCount || 0} 段音频 · 已保存在本机</small></div></div>
+                 <button class="danger-button block" style="margin-top:10px" data-action="remove-voice-pack">${icon("trash")} 删除私人声音包</button>`
+              : `<p style="color:var(--ink-soft);font-size:11px;line-height:1.65">导入后会优先使用私人男声示范，不进入公开 GitHub。未导入时自动使用系统中文语音。</p>`
+          }
+          <label class="secondary-button block" style="cursor:pointer;margin-top:10px">${icon("volume")} 导入私人声音包<input id="voice-pack-input" type="file" accept=".json,.hshvoice,application/json" hidden></label>
+        </div>
+      </section>
+      <section class="section">
         <div class="content-card flat">
           <div class="data-actions">
             <button class="secondary-button block" data-action="export-data" ${!state.sessions.length ? "disabled" : ""}>${icon("download")} 导出训练记录</button>
@@ -1084,9 +1112,140 @@
     next(0);
   }
 
+  function stopVoicePlayback() {
+    if (!state.voicePlayback) return;
+    clearTimeout(state.voicePlayback.delay);
+    try {
+      state.voicePlayback.audio?.pause();
+    } catch {
+      // ignore already finished audio
+    }
+    state.voicePlayback.cancelled = true;
+    state.voicePlayback = null;
+    window.speechSynthesis?.cancel?.();
+  }
+
+  function getVoiceAsset(key) {
+    return idb("voiceAssets", "readonly", (store) => store.get(key));
+  }
+
+  function base64Audio(data, mime = "audio/mpeg") {
+    const binary = atob(data);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return new Blob([bytes], { type: mime });
+  }
+
+  async function playVoiceKeys(keys, fallbackText, rate = state.voiceRate) {
+    if (!state.voiceMeta) {
+      speakParagraphs(fallbackText, rate);
+      return;
+    }
+    stopVoicePlayback();
+    try {
+      const assets = await Promise.all(keys.map((key) => getVoiceAsset(key)));
+      if (assets.some((asset) => !asset?.blob)) {
+        speakParagraphs(fallbackText, rate);
+        return;
+      }
+      const playback = { cancelled: false, audio: null, delay: null };
+      state.voicePlayback = playback;
+      const playAt = (index) => {
+        if (playback.cancelled || index >= assets.length) {
+          if (state.voicePlayback === playback) state.voicePlayback = null;
+          return;
+        }
+        const url = URL.createObjectURL(assets[index].blob);
+        const audio = new Audio(url);
+        playback.audio = audio;
+        audio.playbackRate = rate;
+        audio.preservesPitch = true;
+        audio.onended = () => {
+          URL.revokeObjectURL(url);
+          playback.delay = setTimeout(() => playAt(index + 1), 550);
+        };
+        audio.onerror = () => {
+          URL.revokeObjectURL(url);
+          speakParagraphs(fallbackText, rate);
+        };
+        audio.play().catch(() => {
+          URL.revokeObjectURL(url);
+          speakParagraphs(fallbackText, rate);
+        });
+      };
+      playAt(0);
+    } catch (error) {
+      console.warn(error);
+      speakParagraphs(fallbackText, rate);
+    }
+  }
+
+  async function importVoicePack(file) {
+    if (!file) return;
+    try {
+      const payload = JSON.parse(await file.text());
+      if (payload?.type !== "private-voice-pack" || !payload.files) {
+        throw new Error("Invalid voice pack");
+      }
+      const rows = Object.entries(payload.files);
+      if (!rows.length) throw new Error("Empty voice pack");
+      showToast("正在导入私人声音包…");
+      const db = await openDB();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(["voiceAssets", "voiceMeta"], "readwrite");
+        const assets = tx.objectStore("voiceAssets");
+        assets.clear();
+        for (const [key, fileData] of rows) {
+          assets.put({
+            key,
+            blob: base64Audio(fileData.data, fileData.mime || "audio/mpeg"),
+          });
+        }
+        tx.objectStore("voiceMeta").put({
+          id: "active",
+          name: payload.name || "私人男声",
+          voiceId: payload.voiceId || "",
+          fileCount: rows.length,
+          createdAt: payload.createdAt || null,
+          importedAt: new Date().toISOString(),
+        });
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      state.voiceMeta = await idb("voiceMeta", "readonly", (store) => store.get("active"));
+      render();
+      showToast(`私人声音包已导入，共 ${rows.length} 段`);
+    } catch (error) {
+      console.error(error);
+      showToast("声音包导入失败，请确认选择了正确的私人声音包文件");
+    }
+  }
+
+  async function removeVoicePack() {
+    if (!window.confirm("删除本机私人声音包？删除后将恢复系统语音。")) return;
+    try {
+      const db = await openDB();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(["voiceAssets", "voiceMeta"], "readwrite");
+        tx.objectStore("voiceAssets").clear();
+        tx.objectStore("voiceMeta").delete("active");
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      state.voiceMeta = null;
+      render();
+      showToast("私人声音包已删除");
+    } catch (error) {
+      console.error(error);
+      showToast("删除失败");
+    }
+  }
+
   function voiceRateControls() {
     return `<div class="v3-voice-rate">
-      <span>示范语速 · 中文男声优先</span>
+      <span>示范语速 · ${state.voiceMeta ? esc(state.voiceMeta.name) : "系统中文男声"}</span>
       ${[0.8, 1, 1.5]
         .map(
           (rate) => `<button class="${state.voiceRate === rate ? "active" : ""}" data-action="voice-rate" data-rate="${rate}">${rate.toFixed(1)}x</button>`,
@@ -1793,10 +1952,13 @@
         idb("sessions", "readwrite", (store) => store.clear()),
         idb("levelProgress", "readwrite", (store) => store.clear()),
         idb("sideProgress", "readwrite", (store) => store.clear()),
+        idb("voiceAssets", "readwrite", (store) => store.clear()),
+        idb("voiceMeta", "readwrite", (store) => store.clear()),
       ]);
       state.sessions = [];
       state.levelProgress = {};
       state.sideProgress = {};
+      state.voiceMeta = null;
       render();
       showToast("本机数据已清空");
     } catch (error) {
@@ -1807,6 +1969,7 @@
 
   function render() {
     stopTimer();
+    stopVoicePlayback();
     parseRoute();
     let html = "";
     switch (state.route) {
@@ -1892,9 +2055,15 @@
       case "speak-memorize": {
         const level = getLevel(state.train.levelId);
         if (state.train.view === "sentence") {
-          speak(level.text[state.train.sentenceIndex]);
+          playVoiceKeys(
+            [`level-${level.id}-p${state.train.sentenceIndex + 1}`],
+            level.text[state.train.sentenceIndex],
+          );
         } else {
-          speakParagraphs(level.text);
+          playVoiceKeys(
+            level.text.map((_, index) => `level-${level.id}-p${index + 1}`),
+            level.text,
+          );
         }
         break;
       }
@@ -1916,8 +2085,17 @@
       case "speak-side": {
         const pack = getSidePack(state.sideTrain.packId);
         const sample = pack.samples.find((item) => item.id === state.sideTrain.sampleId);
-        if (state.sideTrain.view === "sentence") speak(sample.text[state.sideTrain.sentenceIndex]);
-        else speakParagraphs(sample.text);
+        if (state.sideTrain.view === "sentence") {
+          playVoiceKeys(
+            [`side-${pack.id}-${sample.id}-p${state.sideTrain.sentenceIndex + 1}`],
+            sample.text[state.sideTrain.sentenceIndex],
+          );
+        } else {
+          playVoiceKeys(
+            sample.text.map((_, index) => `side-${pack.id}-${sample.id}-p${index + 1}`),
+            sample.text,
+          );
+        }
         break;
       }
       case "voice-rate":
@@ -2033,6 +2211,9 @@
       case "clear-data":
         clearAllData();
         break;
+      case "remove-voice-pack":
+        removeVoicePack();
+        break;
       default:
         break;
     }
@@ -2053,6 +2234,11 @@
     }
     if (event.target.id === "level-import-input") {
       importData(event.target.files?.[0]).finally(() => {
+        event.target.value = "";
+      });
+    }
+    if (event.target.id === "voice-pack-input") {
+      importVoicePack(event.target.files?.[0]).finally(() => {
         event.target.value = "";
       });
     }

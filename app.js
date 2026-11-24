@@ -725,7 +725,6 @@
             <div class="v3-card-tools">
               <button class="${drill.view === "sentence" ? "active" : ""}" data-action="side-view" data-view="sentence">逐句跟读</button>
               <button class="${drill.view === "full" ? "active" : ""}" data-action="side-view" data-view="full">全文跟读</button>
-              <button class="speak-button" data-action="speak-side">${icon("volume")} 听示范</button>
             </div>
             ${
               drill.view === "sentence"
@@ -734,6 +733,10 @@
                 : `<div class="v3-classic-text">${sample.text.map((paragraph) => `<p>${esc(paragraph)}</p>`).join("")}</div>`
             }
           </section>
+          <div class="v3-demo-controls">
+            <button data-action="demo-toggle">${icon("play")} 播放示范</button>
+            <button data-action="demo-restart" disabled>${icon("refresh")} 从头</button>
+          </div>
           ${voiceRateControls()}
           ${userRecordingControls()}
           ${
@@ -1092,26 +1095,6 @@
     speechSynthesis.speak(utterance);
   }
 
-  function speakParagraphs(paragraphs, rate = state.voiceRate) {
-    if (!("speechSynthesis" in window)) {
-      showToast("当前浏览器不支持语音示范");
-      return;
-    }
-    speechSynthesis.cancel();
-    const voice = preferredVoice();
-    const blocks = Array.isArray(paragraphs) ? paragraphs : [paragraphs];
-    const next = (index) => {
-      if (index >= blocks.length) return;
-      const utterance = new SpeechSynthesisUtterance(blocks[index]);
-      utterance.lang = "zh-CN";
-      utterance.rate = rate;
-      if (voice) utterance.voice = voice;
-      utterance.onend = () => setTimeout(() => next(index + 1), 550);
-      speechSynthesis.speak(utterance);
-    };
-    next(0);
-  }
-
   function stopVoicePlayback() {
     if (!state.voicePlayback) return;
     clearTimeout(state.voicePlayback.delay);
@@ -1120,9 +1103,12 @@
     } catch {
       // ignore already finished audio
     }
+    if (state.voicePlayback.url) URL.revokeObjectURL(state.voicePlayback.url);
     state.voicePlayback.cancelled = true;
+    state.voicePlayback.audio = null;
     state.voicePlayback = null;
     window.speechSynthesis?.cancel?.();
+    updateDemoControls();
   }
 
   function getVoiceAsset(key) {
@@ -1136,48 +1122,224 @@
     return new Blob([bytes], { type: mime });
   }
 
-  async function playVoiceKeys(keys, fallbackText, rate = state.voiceRate) {
-    if (!state.voiceMeta) {
-      speakParagraphs(fallbackText, rate);
+  function updateDemoControls() {
+    const playback = state.voicePlayback;
+    document.querySelectorAll('[data-action="demo-toggle"]').forEach((button) => {
+      button.innerHTML = playback?.paused
+        ? `${icon("play")} 继续播放`
+        : playback
+          ? `${icon("stop")} 暂停`
+          : `${icon("play")} 播放示范`;
+    });
+    document.querySelectorAll('[data-action="demo-restart"]').forEach((button) => {
+      button.disabled = !playback;
+    });
+  }
+
+  function finishVoicePlayback(playback) {
+    if (state.voicePlayback !== playback) return;
+    playback.cancelled = true;
+    playback.audio = null;
+    state.voicePlayback = null;
+    updateDemoControls();
+  }
+
+  function playPrivateBlock(playback, index) {
+    if (playback.cancelled || state.voicePlayback !== playback) return;
+    if (index >= playback.assets.length) {
+      finishVoicePlayback(playback);
       return;
     }
+    playback.index = index;
+    const url = URL.createObjectURL(playback.assets[index].blob);
+    const audio = new Audio(url);
+    playback.audio = audio;
+    playback.url = url;
+    playback.blockEnded = false;
+    audio.playbackRate = playback.rate;
+    audio.preservesPitch = true;
+    audio.onended = () => {
+      URL.revokeObjectURL(url);
+      playback.url = null;
+      playback.audio = null;
+      playback.blockEnded = true;
+      if (playback.paused) return;
+      playback.delay = setTimeout(() => playPrivateBlock(playback, index + 1), 550);
+    };
+    audio.onerror = () => {
+      URL.revokeObjectURL(url);
+      playback.url = null;
+      playback.audio = null;
+      startSystemPlayback(playback.blocks, playback.rate);
+    };
+    audio.play().catch(() => {
+      URL.revokeObjectURL(url);
+      playback.url = null;
+      playback.audio = null;
+      startSystemPlayback(playback.blocks, playback.rate);
+    });
+  }
+
+  function playSystemBlock(playback, index) {
+    if (playback.cancelled || state.voicePlayback !== playback) return;
+    if (index >= playback.blocks.length) {
+      finishVoicePlayback(playback);
+      return;
+    }
+    if (!("speechSynthesis" in window)) {
+      finishVoicePlayback(playback);
+      showToast("当前浏览器不支持语音示范");
+      return;
+    }
+    playback.index = index;
+    const utterance = new SpeechSynthesisUtterance(playback.blocks[index]);
+    const voice = preferredVoice();
+    utterance.lang = "zh-CN";
+    utterance.rate = playback.rate;
+    if (voice) utterance.voice = voice;
+    playback.utterance = utterance;
+    playback.blockEnded = false;
+    utterance.onend = () => {
+      playback.blockEnded = true;
+      if (playback.paused) return;
+      playback.delay = setTimeout(() => playSystemBlock(playback, index + 1), 550);
+    };
+    speechSynthesis.speak(utterance);
+  }
+
+  function startSystemPlayback(blocks, rate = state.voiceRate) {
     stopVoicePlayback();
+    const playback = {
+      mode: "system",
+      blocks: Array.isArray(blocks) ? blocks : [blocks],
+      assets: [],
+      rate,
+      index: 0,
+      paused: false,
+      cancelled: false,
+      audio: null,
+      utterance: null,
+      delay: null,
+      blockEnded: false,
+    };
+    state.voicePlayback = playback;
+    playSystemBlock(playback, 0);
+    updateDemoControls();
+  }
+
+  async function playVoiceKeys(keys, fallbackText, rate = state.voiceRate) {
+    const blocks = Array.isArray(fallbackText) ? fallbackText : [fallbackText];
+    if (!state.voiceMeta) {
+      startSystemPlayback(blocks, rate);
+      return;
+    }
     try {
       const assets = await Promise.all(keys.map((key) => getVoiceAsset(key)));
       if (assets.some((asset) => !asset?.blob)) {
-        speakParagraphs(fallbackText, rate);
+        startSystemPlayback(blocks, rate);
         return;
       }
-      const playback = { cancelled: false, audio: null, delay: null };
-      state.voicePlayback = playback;
-      const playAt = (index) => {
-        if (playback.cancelled || index >= assets.length) {
-          if (state.voicePlayback === playback) state.voicePlayback = null;
-          return;
-        }
-        const url = URL.createObjectURL(assets[index].blob);
-        const audio = new Audio(url);
-        playback.audio = audio;
-        audio.playbackRate = rate;
-        audio.preservesPitch = true;
-        audio.onended = () => {
-          URL.revokeObjectURL(url);
-          playback.delay = setTimeout(() => playAt(index + 1), 550);
-        };
-        audio.onerror = () => {
-          URL.revokeObjectURL(url);
-          speakParagraphs(fallbackText, rate);
-        };
-        audio.play().catch(() => {
-          URL.revokeObjectURL(url);
-          speakParagraphs(fallbackText, rate);
-        });
+      stopVoicePlayback();
+      const playback = {
+        mode: "private",
+        keys,
+        blocks,
+        assets,
+        rate,
+        index: 0,
+        paused: false,
+        cancelled: false,
+        audio: null,
+        utterance: null,
+        delay: null,
+        url: null,
+        blockEnded: false,
       };
-      playAt(0);
+      state.voicePlayback = playback;
+      playPrivateBlock(playback, 0);
+      updateDemoControls();
     } catch (error) {
       console.warn(error);
-      speakParagraphs(fallbackText, rate);
+      startSystemPlayback(blocks, rate);
     }
+  }
+
+  function toggleVoicePlayback() {
+    const playback = state.voicePlayback;
+    if (!playback) return;
+    playback.paused = !playback.paused;
+    if (playback.paused) {
+      clearTimeout(playback.delay);
+      playback.delay = null;
+      if (playback.mode === "private") playback.audio?.pause();
+      else window.speechSynthesis?.pause?.();
+    } else if (playback.mode === "private") {
+      if (playback.audio && !playback.blockEnded) {
+        playback.audio.play().catch(() => {});
+      } else {
+        playPrivateBlock(playback, playback.blockEnded ? playback.index + 1 : playback.index);
+      }
+    } else if (playback.blockEnded) {
+      playSystemBlock(playback, playback.index + 1);
+    } else {
+      window.speechSynthesis?.resume?.();
+    }
+    updateDemoControls();
+  }
+
+  function restartVoicePlayback() {
+    const playback = state.voicePlayback;
+    if (!playback) return;
+    const { mode, keys, blocks, rate } = playback;
+    stopVoicePlayback();
+    if (mode === "private") playVoiceKeys(keys, blocks, rate);
+    else startSystemPlayback(blocks, rate);
+  }
+
+  function currentDemoDefinition() {
+    if (state.route === "train" && state.train?.stage === "memorize") {
+      const level = getLevel(state.train.levelId);
+      if (state.train.view === "sentence") {
+        return {
+          keys: [`level-${level.id}-p${state.train.sentenceIndex + 1}`],
+          blocks: [level.text[state.train.sentenceIndex]],
+        };
+      }
+      return {
+        keys: level.text.map((_, index) => `level-${level.id}-p${index + 1}`),
+        blocks: level.text,
+      };
+    }
+    if (state.route === "side-train" && state.sideTrain?.stage === "memorize") {
+      const pack = getSidePack(state.sideTrain.packId);
+      const sample = pack?.samples.find((item) => item.id === state.sideTrain.sampleId);
+      if (!sample) return null;
+      if (state.sideTrain.view === "sentence") {
+        return {
+          keys: [`side-${pack.id}-${sample.id}-p${state.sideTrain.sentenceIndex + 1}`],
+          blocks: [sample.text[state.sideTrain.sentenceIndex]],
+        };
+      }
+      return {
+        keys: sample.text.map((_, index) => `side-${pack.id}-${sample.id}-p${index + 1}`),
+        blocks: sample.text,
+      };
+    }
+    return null;
+  }
+
+  function toggleCurrentDemo() {
+    if (state.voicePlayback) {
+      toggleVoicePlayback();
+      return;
+    }
+    const demo = currentDemoDefinition();
+    if (demo) playVoiceKeys(demo.keys, demo.blocks);
+  }
+
+  function restartCurrentDemo() {
+    const demo = currentDemoDefinition();
+    if (demo) playVoiceKeys(demo.keys, demo.blocks);
   }
 
   async function importVoicePack(file) {
@@ -1506,7 +1668,6 @@
             <div class="v3-card-tools">
               <button class="${drill.view === "sentence" ? "active" : ""}" data-action="memorize-view" data-view="sentence">逐句跟读</button>
               <button class="${drill.view === "full" ? "active" : ""}" data-action="memorize-view" data-view="full">全文跟读</button>
-              <button class="speak-button" data-action="speak-memorize">${icon("volume")} 听示范</button>
             </div>
             ${
               drill.view === "sentence"
@@ -1519,6 +1680,10 @@
                 : `<div class="v3-classic-text">${level.text.map((paragraph) => `<p>${esc(paragraph)}</p>`).join("")}</div>`
             }
           </section>
+          <div class="v3-demo-controls">
+            <button data-action="demo-toggle">${icon("play")} 播放示范</button>
+            <button data-action="demo-restart" disabled>${icon("refresh")} 从头</button>
+          </div>
           ${voiceRateControls()}
           ${userRecordingControls()}
           ${
@@ -2003,6 +2168,7 @@
         html = renderToday();
     }
     app.innerHTML = html;
+    updateDemoControls();
     window.scrollTo({ top: 0, behavior: "instant" });
   }
 
@@ -2053,18 +2219,7 @@
         break;
       }
       case "speak-memorize": {
-        const level = getLevel(state.train.levelId);
-        if (state.train.view === "sentence") {
-          playVoiceKeys(
-            [`level-${level.id}-p${state.train.sentenceIndex + 1}`],
-            level.text[state.train.sentenceIndex],
-          );
-        } else {
-          playVoiceKeys(
-            level.text.map((_, index) => `level-${level.id}-p${index + 1}`),
-            level.text,
-          );
-        }
+        toggleCurrentDemo();
         break;
       }
       case "side-view":
@@ -2083,21 +2238,15 @@
         break;
       }
       case "speak-side": {
-        const pack = getSidePack(state.sideTrain.packId);
-        const sample = pack.samples.find((item) => item.id === state.sideTrain.sampleId);
-        if (state.sideTrain.view === "sentence") {
-          playVoiceKeys(
-            [`side-${pack.id}-${sample.id}-p${state.sideTrain.sentenceIndex + 1}`],
-            sample.text[state.sideTrain.sentenceIndex],
-          );
-        } else {
-          playVoiceKeys(
-            sample.text.map((_, index) => `side-${pack.id}-${sample.id}-p${index + 1}`),
-            sample.text,
-          );
-        }
+        toggleCurrentDemo();
         break;
       }
+      case "demo-toggle":
+        toggleCurrentDemo();
+        break;
+      case "demo-restart":
+        restartCurrentDemo();
+        break;
       case "voice-rate":
         state.voiceRate = Number(trigger.dataset.rate);
         render();
